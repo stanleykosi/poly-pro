@@ -4,6 +4,22 @@
  * It creates the initial set of tables required for the application to function.
  * This script is designed to be run by the `golang-migrate/migrate` tool.
  *
+ * ⚠️  IMPORTANT: PARTITIONED TABLE USAGE ⚠️
+ * 
+ * The following tables are PARTITIONED and require special handling for inserts:
+ * - market_price_history
+ * - market_sentiment_history
+ * 
+ * ❌ DO NOT use direct INSERT statements on these tables!
+ *    Example: INSERT INTO market_price_history (...) VALUES (...)
+ *    This will FAIL if the partition doesn't exist.
+ * 
+ * ✅ USE the wrapper functions instead (they auto-create partitions):
+ *    - insert_market_price_history(...)
+ *    - insert_market_sentiment_history(...)
+ * 
+ * See the wrapper function definitions below for usage examples.
+ *
  * The schema includes:
  * - users: For user accounts.
  * - wallets: For user's Polymarket wallet information.
@@ -63,6 +79,10 @@ CREATE INDEX idx_trades_executed_at ON trades(executed_at DESC);
 -- Table: market_price_history (Native PostgreSQL Partitioned Table)
 -- Stores time-series price data for market charts. Optimized for fast time-based queries.
 -- Partitioned by month using RANGE partitioning on the 'time' column.
+--
+-- ⚠️  WARNING: This is a PARTITIONED table!
+--    DO NOT use direct INSERT statements. Use insert_market_price_history() function instead.
+--    Direct INSERT will fail with: "no partition of relation found for row"
 CREATE TABLE market_price_history (
     time TIMESTAMPTZ NOT NULL,
     market_id VARCHAR(255) NOT NULL,
@@ -85,6 +105,10 @@ CREATE INDEX idx_market_price_history_market_time ON market_price_history(market
 -- Table: market_sentiment_history (Native PostgreSQL Partitioned Table)
 -- Stores aggregated sentiment analysis data over time for each market.
 -- Partitioned by month using RANGE partitioning on the 'time' column.
+--
+-- ⚠️  WARNING: This is a PARTITIONED table!
+--    DO NOT use direct INSERT statements. Use insert_market_sentiment_history() function instead.
+--    Direct INSERT will fail with: "no partition of relation found for row"
 CREATE TABLE market_sentiment_history (
     time TIMESTAMPTZ NOT NULL,
     market_id VARCHAR(255) NOT NULL,
