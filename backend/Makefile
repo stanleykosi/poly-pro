@@ -12,12 +12,13 @@
 # - The `DATABASE_URL` environment variable must be set in a .env.local file and loaded
 #   into the shell's environment before running migration commands. One way is to use `source .env.local`.
 
-.PHONY: help migrate-create migrate-up
+.PHONY: help migrate-create migrate-up sqlc-generate
 
 help:
 	@echo "Available commands:"
 	@echo "  migrate-create NAME=<name>   - Create a new SQL migration"
 	@echo "  migrate-up                   - Apply all up migrations"
+	@echo "  sqlc-generate                - Generate Go code from SQL queries (requires sqlc CLI)"
 
 # Database migration commands using golang-migrate
 # https://github.com/golang-migrate/migrate
@@ -45,4 +46,20 @@ migrate-up:
 	fi
 	@echo ">> Applying all 'up' migrations..."
 	migrate -database "$$DATABASE_URL" -path $(MIGRATE_PATH) up
+
+# SQL Code Generation using sqlc
+# https://docs.sqlc.dev/en/latest/overview/install.html
+#
+# Generates type-safe Go code from SQL queries defined in internal/db/queries/
+# Requires sqlc CLI to be installed. Install with: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+# Usage: make sqlc-generate
+sqlc-generate:
+	@if ! command -v sqlc &> /dev/null; then \
+		echo "Error: sqlc CLI is not installed."; \
+		echo "Install it with: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest"; \
+		echo "Or see: https://docs.sqlc.dev/en/latest/overview/install.html"; \
+		exit 1; \
+	fi
+	@echo ">> Generating Go code from SQL queries..."
+	sqlc generate
 
