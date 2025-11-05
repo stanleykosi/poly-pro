@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/server ./cmd/server/main.go
 
 # Run stage
 FROM alpine:latest
@@ -23,8 +23,12 @@ WORKDIR /root/
 # Copy the binary from builder
 COPY --from=builder /app/server .
 
+# Make sure the binary is executable
+RUN chmod +x /root/server
+
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080
 
+# Run the server binary
 CMD ["./server"]
 
