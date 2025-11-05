@@ -120,11 +120,18 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 		}
 	}
 	
-	// If no email found but we have a primary_email_address_id, 
-	// we could potentially fetch it from Clerk API, but for now we'll skip
-	// If email_addresses is empty, try to use phone number as identifier
+	// If no email found, create a placeholder email using the user ID
+	// This handles cases where:
+	// 1. User signs up with phone only (email_addresses is empty)
+	// 2. User is created before email verification (email_addresses is empty but primary_email_address_id exists)
+	// 3. User has no email or phone at all (we still need to create the user record)
 	if primaryEmail == "" {
-		// Try to find primary phone number
+		// Create a placeholder email using the user ID
+		// Format: user_{clerk_id}@clerk.placeholder
+		// This ensures we can create the user in the database even if no email is provided yet
+		primaryEmail = event.Data.ID + "@clerk.placeholder"
+		
+		// Try to find primary phone number for logging
 		var phoneNumber string
 		if event.Data.PrimaryPhoneNumberID != "" {
 			for _, phone := range event.Data.PhoneNumbers {
@@ -135,26 +142,12 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 			}
 		}
 		
-		// If we have a phone number but no email, create a placeholder email
-		// This handles cases where users sign up with phone only
-		if phoneNumber != "" {
-			// Create a placeholder email using the user ID
-			// Format: user_{clerk_id}@clerk.placeholder
-			primaryEmail = event.Data.ID + "@clerk.placeholder"
-			server.logger.Warn("user created without email, using placeholder", 
-				"user_id", event.Data.ID,
-				"phone", phoneNumber,
-				"placeholder_email", primaryEmail)
-		} else {
-			// No email and no phone - cannot create user
-			server.logger.Error("clerk webhook 'user.created' event has no email or phone", 
-				"eventId", event.Type,
-				"user_id", event.Data.ID,
-				"email_count", len(event.Data.EmailAddresses),
-				"phone_count", len(event.Data.PhoneNumbers))
-			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "User must have either email or phone number"})
-			return
-		}
+		server.logger.Warn("user created without email in payload, using placeholder", 
+			"user_id", event.Data.ID,
+			"primary_email_address_id", event.Data.PrimaryEmailAddressID,
+			"phone", phoneNumber,
+			"placeholder_email", primaryEmail,
+			"note", "Email may be added later via user.updated webhook")
 	}
 
 	// 7. Delegate user creation to the user service.
