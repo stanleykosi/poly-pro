@@ -22,6 +22,7 @@ require (
 	github.com/holiman/uint256 v1.3.0 // indirect
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
+	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/supranational/blst v0.3.11 // indirect
 	github.com/tklauser/go-sysconf v0.3.14 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect

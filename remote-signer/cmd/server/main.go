@@ -14,18 +14,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/poly-pro/remote-signer/internal/config"
 	"github.com/poly-pro/remote-signer/internal/crypto"
 	"github.com/poly-pro/remote-signer/internal/server"
 	"github.com/poly-pro/remote-signer/internal/vault"
 	"github.com/poly-pro/remote-signer/proto"
+	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -61,8 +65,15 @@ func main() {
 	grpcServer := server.NewGRPCServer(logger, mockVault, signer)
 
 	// ------------------------------------------------------------------
-	// gRPC Server Setup and Startup
+	// Server Setup with Connection Multiplexing (HTTP + gRPC)
 	// ------------------------------------------------------------------
+	// Railway tries to do HTTP health checks. We need to provide an HTTP endpoint
+	// that responds to health check requests, while also serving gRPC on the same port.
+	// We'll use cmux (Connection Multiplexer) to route HTTP and gRPC on the same port.
+	
+	// Log the port being used for debugging
+	logger.Info("configuring server", "port", cfg.Port)
+
 	// Create a TCP listener on the configured port.
 	// Railway injects the PORT environment variable, so we listen on all interfaces (0.0.0.0)
 	lis, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%s", cfg.Port))
@@ -71,6 +82,46 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.Info("TCP listener created", "address", lis.Addr().String())
+
+	// Create a connection multiplexer to handle both HTTP and gRPC on the same port
+	mux := cmux.New(lis)
+
+	// Match HTTP/1.x requests (for health checks)
+	httpL := mux.Match(cmux.HTTP1Fast())
+	
+	// Match HTTP/2 requests (for gRPC)
+	// gRPC uses HTTP/2, so any HTTP/2 connection is likely gRPC
+	grpcL := mux.Match(cmux.HTTP2())
+
+	// ------------------------------------------------------------------
+	// HTTP Health Check Server
+	// ------------------------------------------------------------------
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"ok","service":"remote-signer","port":"%s"}`, cfg.Port)
+	})
+	
+	httpServer := &http.Server{
+		Handler:      httpMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Start HTTP server in a goroutine
+	go func() {
+		logger.Info("HTTP health check server starting", "port", cfg.Port)
+		if err := httpServer.Serve(httpL); err != nil {
+			logger.Error("HTTP server failed to serve", "error", err)
+		}
+	}()
+
+	// ------------------------------------------------------------------
+	// gRPC Server Setup
+	// ------------------------------------------------------------------
 	// Create a new gRPC server instance.
 	s := grpc.NewServer()
 
@@ -81,14 +132,27 @@ func main() {
 	// like grpcurl to discover and interact with the server.
 	reflection.Register(s)
 
-	// Start the server in a separate goroutine so it doesn't block.
+	// Start the gRPC server in a separate goroutine
 	go func() {
-		logger.Info("gRPC server starting", "address", lis.Addr().String())
-		if err := s.Serve(lis); err != nil {
+		logger.Info("gRPC server starting", "address", lis.Addr().String(), "port", cfg.Port)
+		if err := s.Serve(grpcL); err != nil {
 			logger.Error("gRPC server failed to serve", "error", err)
 			os.Exit(1)
 		}
 	}()
+
+	// Start the connection multiplexer
+	go func() {
+		logger.Info("connection multiplexer starting", "port", cfg.Port)
+		if err := mux.Serve(); err != nil {
+			logger.Error("connection multiplexer failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	logger.Info("server is ready and listening", "port", cfg.Port, "address", lis.Addr().String())
+	logger.Info("HTTP health check available at /health")
+	logger.Info("gRPC service available for signing requests")
 
 	// ------------------------------------------------------------------
 	// Handle Graceful Shutdown
@@ -101,9 +165,21 @@ func main() {
 	<-quit
 	logger.Info("shutdown signal received, initiating graceful shutdown")
 
+	// Stop the connection multiplexer (this will stop accepting new connections)
+	mux.Close()
+
+	// Create a context with timeout for graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Gracefully shutdown the HTTP server
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP server shutdown error", "error", err)
+	}
+
 	// Gracefully stop the gRPC server. This will stop accepting new connections
 	// and wait for existing RPCs to finish.
 	s.GracefulStop()
 
-	logger.Info("gRPC server shut down gracefully")
+	logger.Info("all servers shut down gracefully")
 }
