@@ -33,6 +33,5 @@ vendor/
 # OS
 Thumbs.db
 
-.md
-
-
+# Include markdown files (negate any patterns that might ignore them)
+!*.md
