@@ -21,14 +21,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/poly-pro/backend/internal/config"
 	db "github.com/poly-pro/backend/internal/db"
+	"github.com/poly-pro/backend/internal/services"
 )
 
 // Server serves HTTP requests for the Poly-Pro Analytics backend service.
 type Server struct {
-	config config.Config
-	store  db.Querier
-	Router *gin.Engine
-	logger *slog.Logger
+	config      config.Config
+	store       db.Querier
+	Router      *gin.Engine
+	logger      *slog.Logger
+	userService *services.UserService
 }
 
 /**
@@ -44,11 +46,17 @@ type Server struct {
  *   to instantiate the server from the main application entry point.
  */
 func NewServer(config config.Config, store db.Querier) *Server {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Initialize services
+	userService := services.NewUserService(store, logger)
+
 	// Initialize a new Server instance
 	server := &Server{
-		config: config,
-		store:  store,
-		logger: slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+		config:      config,
+		store:       store,
+		logger:      logger,
+		userService: userService,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -68,10 +76,12 @@ func NewServer(config config.Config, store db.Querier) *Server {
 	// Group all API routes under `/api/v1` for versioning.
 	v1 := router.Group("/api/v1")
 	{
-		// Placeholder for future routes
-		v1.GET("/", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "API v1 root"})
-		})
+		// Webhook routes
+		webhookGroup := v1.Group("/webhooks")
+		{
+			// Endpoint for receiving webhooks from Clerk, specifically for user creation events.
+			webhookGroup.POST("/clerk", server.handleCreateUserWebhook)
+		}
 	}
 
 	// Attach the configured router to our server instance

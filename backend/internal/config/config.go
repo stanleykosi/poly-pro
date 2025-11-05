@@ -23,8 +23,9 @@ import (
 // Config holds all configuration for the application.
 // Values are read from environment variables or a .env file.
 type Config struct {
-	Port        string
-	DatabaseURL string
+	Port           string
+	DatabaseURL    string
+	ClerkSecretKey string
 }
 
 /**
@@ -64,6 +65,7 @@ func LoadConfig(path string) (config Config, err error) {
 	}
 
 	config.DatabaseURL = os.Getenv("DATABASE_URL")
+	config.ClerkSecretKey = os.Getenv("CLERK_SECRET_KEY")
 
 	return
 }
