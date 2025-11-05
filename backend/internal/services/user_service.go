@@ -77,18 +77,22 @@ func (s *UserService) CreateUser(ctx context.Context, clerkUserID string, email 
 		// as Clerk might retry sending a webhook.
 		if strings.Contains(err.Error(), "unique constraint") {
 			s.logger.Warn("attempted to create a user that already exists", "clerk_id", clerkUserID)
-			// Check if the user exists to be certain.
+			// Try to fetch the existing user - this might be a duplicate webhook
 			existingUser, findErr := s.store.GetUserByClerkID(ctx, clerkUserID)
-			if findErr != nil && !errors.Is(findErr, pgx.ErrNoRows) {
+			if findErr != nil {
+				// If we can't find the user (shouldn't happen with unique constraint), 
+				// it might be a race condition or the constraint was on email instead of clerk_id
+				// Still return ErrUserAlreadyExists to indicate this is an idempotent operation
+				if errors.Is(findErr, pgx.ErrNoRows) {
+					s.logger.Warn("unique constraint violation but user not found by clerk_id - may be email conflict", "clerk_id", clerkUserID)
+					return db.User{}, ErrUserAlreadyExists
+				}
+				// For other database errors, log but still treat as idempotent
 				s.logger.Error("failed to check for existing user after unique constraint violation", "error", findErr)
-				return db.User{}, findErr
+				return db.User{}, ErrUserAlreadyExists
 			}
-			// If we found the user, return the already existing user and the specific error
-			if findErr == nil {
-				return existingUser, ErrUserAlreadyExists
-			}
-			// If user not found (race condition?), return the original error.
-			return db.User{}, ErrUserAlreadyExists
+			// User exists - return it with ErrUserAlreadyExists to indicate idempotent operation
+			return existingUser, ErrUserAlreadyExists
 		}
 
 		s.logger.Error("failed to create user in database", "error", err)

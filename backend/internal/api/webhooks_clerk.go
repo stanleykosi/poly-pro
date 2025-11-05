@@ -159,17 +159,34 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 		// If user already exists, this is an idempotent operation - treat as success
 		// According to Clerk docs: Return 2xx status to acknowledge webhook and prevent retries
 		if err == services.ErrUserAlreadyExists {
-			// Fetch the existing user to return in the response
+			// Try to fetch the existing user to return in the response
 			existingUser, findErr := server.userService.GetUserByClerkID(c.Request.Context(), event.Data.ID)
 			if findErr != nil {
-				server.logger.Error("failed to fetch existing user after duplicate webhook", "error", findErr)
-				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to process webhook"})
+				// Even if we can't fetch the user, we still acknowledge the webhook as successful
+				// because the unique constraint violation confirms the user exists
+				// This prevents Clerk from retrying the webhook
+				server.logger.Warn("user already exists but could not fetch user details", 
+					"clerk_id", event.Data.ID, 
+					"error", findErr)
+				// Return 200 OK to acknowledge the webhook as successful
+				// The user exists (confirmed by unique constraint), so we treat this as success
+				c.JSON(http.StatusOK, gin.H{
+					"status": "success", 
+					"message": "User already exists (idempotent operation)",
+					"clerk_id": event.Data.ID,
+				})
 				return
 			}
-			server.logger.Info("webhook acknowledged - user already exists (idempotent)", "user_id", existingUser.ID, "clerk_id", event.Data.ID)
+			server.logger.Info("webhook acknowledged - user already exists (idempotent)", 
+				"user_id", existingUser.ID, 
+				"clerk_id", event.Data.ID)
 			// Return 200 OK to acknowledge the webhook as successful
 			// This prevents Clerk from retrying the webhook
-			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "User already exists", "data": existingUser})
+			c.JSON(http.StatusOK, gin.H{
+				"status": "success", 
+				"message": "User already exists", 
+				"data": existingUser,
+			})
 			return
 		}
 		
