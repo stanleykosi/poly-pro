@@ -76,10 +76,15 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 	// 3. Unmarshal the verified payload into our event struct.
 	var event clerkUserCreatedEvent
 	if err := json.Unmarshal(body, &event); err != nil {
-		server.logger.Error("failed to unmarshal clerk webhook payload", "error", err)
+		server.logger.Error("failed to unmarshal clerk webhook payload", "error", err, "body", string(body))
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Invalid webhook payload"})
 		return
 	}
+	
+	server.logger.Debug("parsed webhook event", 
+		"type", event.Type,
+		"user_id", event.Data.ID,
+		"email_count", len(event.Data.EmailAddresses))
 
 	// 5. Ensure this is a 'user.created' event.
 	if event.Type != "user.created" {
@@ -91,11 +96,31 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 
 	// 6. Validate the necessary data is present.
 	if event.Data.ID == "" || len(event.Data.EmailAddresses) == 0 {
-		server.logger.Error("clerk webhook 'user.created' event is missing data", "eventId", event.Type)
+		server.logger.Error("clerk webhook 'user.created' event is missing data", 
+			"eventId", event.Type,
+			"has_id", event.Data.ID != "",
+			"email_count", len(event.Data.EmailAddresses),
+			"event_data", string(body))
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload missing required fields"})
 		return
 	}
-	primaryEmail := event.Data.EmailAddresses[0].EmailAddress
+	
+	// Find the primary email address (first verified email or first email)
+	var primaryEmail string
+	for _, email := range event.Data.EmailAddresses {
+		if email.EmailAddress != "" {
+			primaryEmail = email.EmailAddress
+			break
+		}
+	}
+	
+	if primaryEmail == "" {
+		server.logger.Error("clerk webhook 'user.created' event has no valid email addresses", 
+			"eventId", event.Type,
+			"email_addresses", event.Data.EmailAddresses)
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "No valid email address found"})
+		return
+	}
 
 	// 7. Delegate user creation to the user service.
 	user, err := server.userService.CreateUser(c.Request.Context(), event.Data.ID, primaryEmail)
