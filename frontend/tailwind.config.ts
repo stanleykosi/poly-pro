@@ -1,34 +1,99 @@
-import type { Config } from 'tailwindcss'
-
 /**
  * @description
  * This is the Tailwind CSS configuration file for the Poly-Pro Analytics frontend.
- * It defines the design system, including the color palette, fonts, and other theme settings.
+ * It defines the design system, including the color palette, fonts, and other theme settings,
+ * aligned with the Shadcn UI methodology.
  *
  * Key features:
- * - Content Scanning: Configured to scan all relevant files in the `app` and `components` directories for Tailwind utility classes.
- * - Theme Extensibility: Prepared for future extension with custom colors, fonts, and spacing as per the project's design system.
- *
- * @notes
- * - The theme will be extended in a later step to match the dark mode style specified in the technical docs.
+ * - Dark Mode: Enabled with the "class" strategy.
+ * - Content Scanning: Configured to scan all relevant files for Tailwind utility classes.
+ * - Theme Extensibility: Defines the full color palette from the technical specification
+ *   using CSS variables for themeability.
+ * - Animation Plugin: Integrates `tailwindcss-animate` for UI animations.
  */
-const config: Config = {
+
+import type { Config } from 'tailwindcss'
+
+const config = {
+  darkMode: ['class'],
   content: [
-    './pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './components/**/*.{js,ts,jsx,tsx,mdx}',
-    './app/**/*.{js,ts,jsx,tsx,mdx}',
+    './pages/**/*.{ts,tsx}',
+    './components/**/*.{ts,tsx}',
+    './app/**/*.{ts,tsx}',
+    './src/**/*.{ts,tsx}',
   ],
+  prefix: '',
   theme: {
+    container: {
+      center: true,
+      padding: '2rem',
+      screens: {
+        '2xl': '1400px',
+      },
+    },
     extend: {
-      backgroundImage: {
-        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-        'gradient-conic':
-          'conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))',
+      colors: {
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        primary: {
+          DEFAULT: 'hsl(var(--primary))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
+        },
+        destructive: {
+          DEFAULT: 'hsl(var(--destructive))',
+          foreground: 'hsl(var(--destructive-foreground))',
+        },
+        constructive: {
+          DEFAULT: 'hsl(var(--constructive))',
+          foreground: 'hsl(var(--constructive-foreground))',
+        },
+        muted: {
+          DEFAULT: 'hsl(var(--muted))',
+          foreground: 'hsl(var(--muted-foreground))',
+        },
+        accent: {
+          DEFAULT: 'hsl(var(--accent))',
+          foreground: 'hsl(var(--accent-foreground))',
+        },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
+        card: {
+          DEFAULT: 'hsl(var(--card))',
+          foreground: 'hsl(var(--card-foreground))',
+        },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+      keyframes: {
+        'accordion-down': {
+          from: { height: '0' },
+          to: { height: 'var(--radix-accordion-content-height)' },
+        },
+        'accordion-up': {
+          from: { height: 'var(--radix-accordion-content-height)' },
+          to: { height: '0' },
+        },
+      },
+      animation: {
+        'accordion-down': 'accordion-down 0.2s ease-out',
+        'accordion-up': 'accordion-up 0.2s ease-out',
       },
     },
   },
-  plugins: [],
-}
+  plugins: [require('tailwindcss-animate')],
+} satisfies Config
 
 export default config
 

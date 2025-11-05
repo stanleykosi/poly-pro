@@ -5,39 +5,61 @@
  *
  * Key features:
  * - Tailwind CSS Directives: Includes the base, components, and utilities layers from Tailwind.
- * - Base Styling: A place to define default styles for elements like `body` to set up the application's theme (e.g., dark mode background).
+ * - CSS Variables: Defines the root color palette for the dark theme using HSL values,
+ *   as specified in the design system. This is the foundation for Shadcn UI's theming.
  */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
+    --background: 212 35% 9%; /* #0D1117 */
+    --foreground: 210 14% 84%; /* #C9D1D9 */
+
+    --card: 215 20% 12%; /* #161B22 */
+    --card-foreground: 210 14% 84%; /* #C9D1D9 */
+
+    --popover: 215 20% 12%; /* #161B22 */
+    --popover-foreground: 210 14% 84%; /* #C9D1D9 */
+
+    --primary: 212 100% 67%; /* #58A6FF */
+    --primary-foreground: 212 35% 9%; /* #0D1117 */
+
+    --secondary: 213 8% 58%; /* #8B949E */
+    --secondary-foreground: 212 35% 9%; /* #0D1117 */
+
+    --muted: 215 20% 18%; /* A slightly lighter shade of card */
+    --muted-foreground: 213 8% 58%; /* #8B949E */
+
+    --accent: 215 20% 24%; /* A slightly lighter shade of muted */
+    --accent-foreground: 210 14% 90%; /* A slightly lighter foreground */
+
+    --destructive: 3 94% 63%; /* #F85149 */
+    --destructive-foreground: 210 14% 98%;
+
+    --constructive: 131 56% 50%; /* #3FB950 */
+    --constructive-foreground: 210 14% 98%;
+
+    --border: 215 20% 24%;
+    --input: 215 20% 24%;
+    --ring: 212 100% 67%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* All variables are already defined for dark mode in :root */
   }
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 }
 
