@@ -1,17 +1,23 @@
 /**
  * @description
- * This component serves as the main entry page for the application.
- * For the initial setup, it's a placeholder to confirm the frontend is running
- * and to demonstrate that the new dark theme and Shadcn UI components are working correctly.
+ * This component serves as the main landing page for the application.
+ * It provides a brief introduction to the platform and includes navigation
+ * for users to sign in or sign up.
  *
- * @notes
- * - This will later be developed into the main landing page or will redirect
- *   to the trading terminal for logged-in users.
+ * Key features:
+ * - Call to Action: Features "Sign In" and "Sign Up" buttons to guide users
+ *   to the authentication flows.
+ * - Simple Layout: A clean and focused presentation of the application's value proposition.
+ *
+ * @dependencies
+ * - next/link: For client-side navigation to the auth pages.
+ * - @/components/ui/button: The application's standard button component.
  */
 
 "use client"
 
 import { Button } from '@/components/ui/button'
+import Link from 'next/link'
 
 export default function Home() {
   return (
@@ -24,8 +30,12 @@ export default function Home() {
           The professional-grade trading terminal for Polymarket.
         </p>
         <div className="flex space-x-2 pt-4">
-          <Button>Get Started</Button>
-          <Button variant="secondary">Learn More</Button>
+          <Button asChild>
+            <Link href="/sign-in">Sign In</Link>
+          </Button>
+          <Button variant="secondary" asChild>
+            <Link href="/sign-up">Sign Up</Link>
+          </Button>
         </div>
       </div>
     </main>
