@@ -14,6 +14,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -26,6 +27,7 @@ type Config struct {
 	Port           string
 	DatabaseURL    string
 	ClerkSecretKey string
+	ClerkIssuerURL string // Added for JWT validation
 }
 
 /**
@@ -66,6 +68,18 @@ func LoadConfig(path string) (config Config, err error) {
 
 	config.DatabaseURL = os.Getenv("DATABASE_URL")
 	config.ClerkSecretKey = os.Getenv("CLERK_SECRET_KEY")
+	config.ClerkIssuerURL = os.Getenv("CLERK_ISSUER_URL")
+
+	// Validate that critical variables are not empty
+	if config.DatabaseURL == "" {
+		return Config{}, errors.New("DATABASE_URL is not set")
+	}
+	if config.ClerkSecretKey == "" {
+		return Config{}, errors.New("CLERK_SECRET_KEY is not set")
+	}
+	if config.ClerkIssuerURL == "" {
+		return Config{}, errors.New("CLERK_ISSUER_URL is not set")
+	}
 
 	return
 }

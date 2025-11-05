@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/poly-pro/backend/internal/auth"
 	"github.com/poly-pro/backend/internal/config"
 	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/services"
@@ -76,11 +77,32 @@ func NewServer(config config.Config, store db.Querier) *Server {
 	// Group all API routes under `/api/v1` for versioning.
 	v1 := router.Group("/api/v1")
 	{
-		// Webhook routes
+		// --- Public Routes ---
+		// Webhook routes are public but should have their own verification logic.
 		webhookGroup := v1.Group("/webhooks")
 		{
 			// Endpoint for receiving webhooks from Clerk, specifically for user creation events.
 			webhookGroup.POST("/clerk", server.handleCreateUserWebhook)
+		}
+
+		// --- Protected Routes ---
+		// Initialize the authentication middleware.
+		authMiddleware, err := auth.NewAuthMiddleware(config.ClerkIssuerURL)
+		if err != nil {
+			logger.Error("failed to create auth middleware", "error", err)
+			os.Exit(1) // Exit if middleware can't be created, as it's critical.
+		}
+
+		// Create a new group for routes that require authentication.
+		authGroup := v1.Group("/")
+		authGroup.Use(authMiddleware)
+		{
+			// User-related protected routes
+			userRoutes := authGroup.Group("/users")
+			{
+				// Endpoint to get the current authenticated user's profile.
+				userRoutes.GET("/me", server.getMe)
+			}
 		}
 	}
 
