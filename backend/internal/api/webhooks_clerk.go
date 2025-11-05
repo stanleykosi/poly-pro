@@ -146,57 +146,81 @@ func (server *Server) verifySvixSignature(body []byte, headers http.Header) bool
 		return false
 	}
 
-	// Remove the "whsec_" prefix if present (Clerk webhook secrets start with "whsec_")
-	secretKey := secret
+	// Svix secret format: The secret starts with "whsec_" and the rest is base64 encoded
+	// According to Svix documentation, we need to use the secret as-is but decode only the part after "whsec_"
+	var secretBytes []byte
+	var err error
+	
 	if strings.HasPrefix(secret, "whsec_") {
-		secretKey = secret[6:] // Remove "whsec_" prefix
+		// Extract the base64 part after "whsec_"
+		secretKey := secret[6:] // Remove "whsec_" prefix
+		secretBytes, err = base64.StdEncoding.DecodeString(secretKey)
+		if err != nil {
+			server.logger.Error("failed to decode secret key from whsec format", "error", err)
+			return false
+		}
+	} else {
+		// If no prefix, try to decode the entire secret as base64
+		secretBytes, err = base64.StdEncoding.DecodeString(secret)
+		if err != nil {
+			server.logger.Error("failed to decode secret key", "error", err)
+			return false
+		}
 	}
 
-	// Decode the secret key from base64
-	secretBytes, err := base64.StdEncoding.DecodeString(secretKey)
-	if err != nil {
-		server.logger.Error("failed to decode secret key", "error", err)
-		return false
-	}
-
-	// Parse the signature header (format: "v1,signature1 v1,signature2 ...")
-	// We need to check each signature version
+	// Parse the signature header
+	// Svix signature format: "v1,signature1 v1,signature2 ..." (space-separated)
+	// Each signature is "version,base64_signature"
 	signatures := strings.Split(svixSignature, " ")
+	
 	for _, sig := range signatures {
 		parts := strings.Split(sig, ",")
 		if len(parts) != 2 {
+			server.logger.Debug("invalid signature format", "signature", sig)
 			continue
 		}
 
 		version := parts[0]
-		signature := parts[1]
+		signatureStr := parts[1]
 
 		// Only verify v1 signatures
 		if version != "v1" {
+			server.logger.Debug("skipping non-v1 signature", "version", version)
 			continue
 		}
 
-		// Create the signed content: timestamp + "." + body (as raw bytes)
-		// The signed content is the timestamp as string, followed by ".", followed by the raw body bytes
-		signedContent := append(append([]byte(svixTimestamp), byte('.')), body...)
+		// Create the signed content according to Svix spec:
+		// The signed content is: timestamp (as string) + "." + body (as raw bytes)
+		// We need to convert timestamp to string, add ".", then append body bytes
+		timestampBytes := []byte(svixTimestamp)
+		signedContent := make([]byte, 0, len(timestampBytes)+1+len(body))
+		signedContent = append(signedContent, timestampBytes...)
+		signedContent = append(signedContent, byte('.'))
+		signedContent = append(signedContent, body...)
 
 		// Compute HMAC-SHA256
 		mac := hmac.New(sha256.New, secretBytes)
-		mac.Write([]byte(signedContent))
+		mac.Write(signedContent)
 		expectedMAC := mac.Sum(nil)
 
 		// Decode the signature from base64
-		receivedMAC, err := base64.StdEncoding.DecodeString(signature)
+		receivedMAC, err := base64.StdEncoding.DecodeString(signatureStr)
 		if err != nil {
+			server.logger.Debug("failed to decode signature", "error", err, "signature", signatureStr)
 			continue
 		}
 
 		// Compare using constant-time comparison
 		if hmac.Equal(expectedMAC, receivedMAC) {
+			server.logger.Debug("signature verification successful")
 			return true
 		}
 	}
 
+	server.logger.Warn("signature verification failed for all signatures", 
+		"signature_header", svixSignature, 
+		"timestamp", svixTimestamp,
+		"body_length", len(body))
 	return false
 }
 
