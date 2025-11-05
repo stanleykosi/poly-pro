@@ -12,13 +12,14 @@
 # - The `DATABASE_URL` environment variable must be set in a .env.local file and loaded
 #   into the shell's environment before running migration commands. One way is to use `source .env.local`.
 
-.PHONY: help migrate-create migrate-up sqlc-generate
+.PHONY: help migrate-create migrate-up sqlc-generate proto-generate
 
 help:
 	@echo "Available commands:"
 	@echo "  migrate-create NAME=<name>   - Create a new SQL migration"
 	@echo "  migrate-up                   - Apply all up migrations"
-	@echo "  sqlc-generate                - Generate Go code from SQL queries (requires sqlc CLI)"
+	@echo "  sqlc-generate                 - Generate Go code from SQL queries (requires sqlc CLI)"
+	@echo "  proto-generate                - Generate Go gRPC code from protobuf definitions"
 
 # Database migration commands using golang-migrate
 # https://github.com/golang-migrate/migrate
@@ -62,4 +63,25 @@ sqlc-generate:
 	fi
 	@echo ">> Generating Go code from SQL queries..."
 	sqlc generate
+
+# Protobuf and gRPC Code Generation
+#
+# This command finds all .proto files in the `proto` directory and compiles them
+# into Go code using the protoc compiler. The generated files will be placed
+# in the `proto` directory.
+#
+# Requires:
+# - protoc (protobuf compiler)
+# - protoc-gen-go (Go plugin for protoc)
+# - protoc-gen-go-grpc (Go gRPC plugin for protoc)
+proto-generate:
+	@if ! which protoc > /dev/null 2>&1; then \
+		echo "Error: protoc is not installed."; \
+		echo "Please install the protobuf compiler. See: https://grpc.io/docs/protoc-installation/"; \
+		exit 1; \
+	fi
+	@echo ">> Generating Go gRPC code from .proto files..."
+	protoc --go_out=. --go_opt=paths=source_relative \
+           --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+           proto/*.proto
 

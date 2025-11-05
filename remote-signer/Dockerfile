@@ -39,9 +39,11 @@ COPY --from=builder /app/server .
 # Make the binary executable
 RUN chmod +x /root/server
 
-# Expose the gRPC port (default 50051)
-EXPOSE 50051
+# Expose port (Railway will inject PORT env var dynamically)
+# We still expose a default port for documentation, but Railway uses PORT env var
+EXPOSE 8081
 
 # The command to run when the container starts
+# Railway will inject PORT environment variable automatically
 CMD ["./server"]
 

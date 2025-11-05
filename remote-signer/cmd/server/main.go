@@ -64,7 +64,8 @@ func main() {
 	// gRPC Server Setup and Startup
 	// ------------------------------------------------------------------
 	// Create a TCP listener on the configured port.
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", cfg.Port))
+	// Railway injects the PORT environment variable, so we listen on all interfaces (0.0.0.0)
+	lis, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%s", cfg.Port))
 	if err != nil {
 		logger.Error("failed to listen on port", "port", cfg.Port, "error", err)
 		os.Exit(1)

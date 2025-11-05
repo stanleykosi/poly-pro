@@ -51,8 +51,8 @@ func LoadConfig(path string) (config Config, err error) {
 	// Read the gRPC server port.
 	config.Port = os.Getenv("PORT")
 	if config.Port == "" {
-		// Default to 50051 if PORT is not set.
-		config.Port = "50051"
+		// Default to 8081 if PORT is not set.
+		config.Port = "8081"
 	}
 
 	// Read the dummy private key for development.

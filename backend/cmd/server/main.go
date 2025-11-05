@@ -115,6 +115,12 @@ func main() {
 			logger.Error("graceful shutdown failed", "error", err)
 			os.Exit(1)
 		}
+
+		// Close all server connections and resources.
+		if err := server.Close(); err != nil {
+			logger.Error("failed to close server resources", "error", err)
+		}
+
 		logger.Info("server shutdown complete")
 	}
 

@@ -27,11 +27,13 @@ import (
 
 // Server serves HTTP requests for the Poly-Pro Analytics backend service.
 type Server struct {
-	config      config.Config
-	store       db.Querier
-	Router      *gin.Engine
-	logger      *slog.Logger
-	userService *services.UserService
+	config            config.Config
+	store             db.Querier
+	Router            *gin.Engine
+	logger            *slog.Logger
+	userService       *services.UserService
+	polymarketService *services.PolymarketService
+	signerClient      services.SignerClient
 }
 
 /**
@@ -49,15 +51,25 @@ type Server struct {
 func NewServer(config config.Config, store db.Querier) *Server {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+	// Initialize gRPC client for the remote signer
+	signerClient, err := services.NewSignerClient(config.RemoteSignerAddress, logger)
+	if err != nil {
+		logger.Error("failed to create signer client", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize services
 	userService := services.NewUserService(store, logger)
+	polymarketService := services.NewPolymarketService(store, logger, signerClient)
 
 	// Initialize a new Server instance
 	server := &Server{
-		config:      config,
-		store:       store,
-		logger:      logger,
-		userService: userService,
+		config:            config,
+		store:             store,
+		logger:            logger,
+		userService:       userService,
+		polymarketService: polymarketService,
+		signerClient:      signerClient,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -103,11 +115,30 @@ func NewServer(config config.Config, store db.Querier) *Server {
 				// Endpoint to get the current authenticated user's profile.
 				userRoutes.GET("/me", server.getMe)
 			}
+
+			// Order-related protected routes
+			orderRoutes := authGroup.Group("/orders")
+			{
+				// Endpoint to place a new order.
+				orderRoutes.POST("/", server.placeOrder)
+			}
 		}
 	}
 
 	// Attach the configured router to our server instance
 	server.Router = router
 	return server
+}
+
+/**
+ * @description
+ * Close closes all connections and resources held by the server.
+ * This should be called during graceful shutdown of the application.
+ */
+func (s *Server) Close() error {
+	if s.signerClient != nil {
+		return s.signerClient.Close()
+	}
+	return nil
 }
 

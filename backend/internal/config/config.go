@@ -24,10 +24,11 @@ import (
 // Config holds all configuration for the application.
 // Values are read from environment variables or a .env file.
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	ClerkSecretKey string
-	ClerkIssuerURL string // Added for JWT validation
+	Port                string
+	DatabaseURL         string
+	ClerkSecretKey      string
+	ClerkIssuerURL      string
+	RemoteSignerAddress string // Added for gRPC client
 }
 
 /**
@@ -69,6 +70,7 @@ func LoadConfig(path string) (config Config, err error) {
 	config.DatabaseURL = os.Getenv("DATABASE_URL")
 	config.ClerkSecretKey = os.Getenv("CLERK_SECRET_KEY")
 	config.ClerkIssuerURL = os.Getenv("CLERK_ISSUER_URL")
+	config.RemoteSignerAddress = os.Getenv("REMOTE_SIGNER_ADDRESS")
 
 	// Validate that critical variables are not empty
 	if config.DatabaseURL == "" {
@@ -79,6 +81,9 @@ func LoadConfig(path string) (config Config, err error) {
 	}
 	if config.ClerkIssuerURL == "" {
 		return Config{}, errors.New("CLERK_ISSUER_URL is not set")
+	}
+	if config.RemoteSignerAddress == "" {
+		return Config{}, errors.New("REMOTE_SIGNER_ADDRESS is not set")
 	}
 
 	return
