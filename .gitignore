@@ -33,6 +33,6 @@ vendor/
 # OS
 Thumbs.db
 
-clerk-webhook docs.md
+.md
 
 
