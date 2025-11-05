@@ -33,11 +33,17 @@ import (
 // Clerk 'user.created' webhook payload. We only unmarshal the fields we need.
 type clerkUserCreatedEvent struct {
 	Data struct {
-		ID            string `json:"id"`
-		EmailAddresses []struct {
+		ID                   string `json:"id"`
+		PrimaryEmailAddressID string `json:"primary_email_address_id"`
+		EmailAddresses       []struct {
 			EmailAddress string `json:"email_address"`
 			ID           string `json:"id"`
 		} `json:"email_addresses"`
+		PhoneNumbers []struct {
+			PhoneNumber string `json:"phone_number"`
+			ID          string `json:"id"`
+		} `json:"phone_numbers"`
+		PrimaryPhoneNumberID string `json:"primary_phone_number_id"`
 	} `json:"data"`
 	Type string `json:"type"`
 }
@@ -95,18 +101,18 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 	}
 
 	// 6. Validate the necessary data is present.
-	if event.Data.ID == "" || len(event.Data.EmailAddresses) == 0 {
-		server.logger.Error("clerk webhook 'user.created' event is missing data", 
+	if event.Data.ID == "" {
+		server.logger.Error("clerk webhook 'user.created' event is missing user ID", 
 			"eventId", event.Type,
-			"has_id", event.Data.ID != "",
-			"email_count", len(event.Data.EmailAddresses),
 			"event_data", string(body))
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload missing required fields"})
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload missing user ID"})
 		return
 	}
 	
-	// Find the primary email address (first verified email or first email)
+	// Extract email address - check email_addresses array first, then fallback to phone number
 	var primaryEmail string
+	
+	// First, try to find email from email_addresses array
 	for _, email := range event.Data.EmailAddresses {
 		if email.EmailAddress != "" {
 			primaryEmail = email.EmailAddress
@@ -114,12 +120,41 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 		}
 	}
 	
+	// If no email found but we have a primary_email_address_id, 
+	// we could potentially fetch it from Clerk API, but for now we'll skip
+	// If email_addresses is empty, try to use phone number as identifier
 	if primaryEmail == "" {
-		server.logger.Error("clerk webhook 'user.created' event has no valid email addresses", 
-			"eventId", event.Type,
-			"email_addresses", event.Data.EmailAddresses)
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "No valid email address found"})
-		return
+		// Try to find primary phone number
+		var phoneNumber string
+		if event.Data.PrimaryPhoneNumberID != "" {
+			for _, phone := range event.Data.PhoneNumbers {
+				if phone.ID == event.Data.PrimaryPhoneNumberID && phone.PhoneNumber != "" {
+					phoneNumber = phone.PhoneNumber
+					break
+				}
+			}
+		}
+		
+		// If we have a phone number but no email, create a placeholder email
+		// This handles cases where users sign up with phone only
+		if phoneNumber != "" {
+			// Create a placeholder email using the user ID
+			// Format: user_{clerk_id}@clerk.placeholder
+			primaryEmail = event.Data.ID + "@clerk.placeholder"
+			server.logger.Warn("user created without email, using placeholder", 
+				"user_id", event.Data.ID,
+				"phone", phoneNumber,
+				"placeholder_email", primaryEmail)
+		} else {
+			// No email and no phone - cannot create user
+			server.logger.Error("clerk webhook 'user.created' event has no email or phone", 
+				"eventId", event.Type,
+				"user_id", event.Data.ID,
+				"email_count", len(event.Data.EmailAddresses),
+				"phone_count", len(event.Data.PhoneNumbers))
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "User must have either email or phone number"})
+			return
+		}
 	}
 
 	// 7. Delegate user creation to the user service.
