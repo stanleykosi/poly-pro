@@ -132,6 +132,13 @@ func (server *Server) verifySvixSignature(body []byte, headers http.Header) bool
 		return false
 	}
 
+	// Extract the Svix ID from headers (required for signed content)
+	svixID := headers.Get("svix-id")
+	if svixID == "" {
+		server.logger.Warn("missing svix-id header")
+		return false
+	}
+
 	// Extract the timestamp from headers
 	svixTimestamp := headers.Get("svix-timestamp")
 	if svixTimestamp == "" {
@@ -190,10 +197,13 @@ func (server *Server) verifySvixSignature(body []byte, headers http.Header) bool
 		}
 
 		// Create the signed content according to Svix spec:
-		// The signed content is: timestamp (as string) + "." + body (as raw bytes)
-		// We need to convert timestamp to string, add ".", then append body bytes
+		// The signed content is: svix_id + "." + svix_timestamp + "." + body
+		// Format: "svix_id.svix_timestamp.body"
+		idBytes := []byte(svixID)
 		timestampBytes := []byte(svixTimestamp)
-		signedContent := make([]byte, 0, len(timestampBytes)+1+len(body))
+		signedContent := make([]byte, 0, len(idBytes)+1+len(timestampBytes)+1+len(body))
+		signedContent = append(signedContent, idBytes...)
+		signedContent = append(signedContent, byte('.'))
 		signedContent = append(signedContent, timestampBytes...)
 		signedContent = append(signedContent, byte('.'))
 		signedContent = append(signedContent, body...)
@@ -219,6 +229,7 @@ func (server *Server) verifySvixSignature(body []byte, headers http.Header) bool
 
 	server.logger.Warn("signature verification failed for all signatures", 
 		"signature_header", svixSignature, 
+		"svix_id", svixID,
 		"timestamp", svixTimestamp,
 		"body_length", len(body))
 	return false
