@@ -1,0 +1,50 @@
+/**
+ * @description
+ * This file defines the Protocol Buffers (Protobuf) contract for the Remote Signing service.
+ * It specifies the gRPC service, its RPC methods, and the message structures for
+ * requests and responses. This contract ensures type-safe communication between the
+ * main backend and the isolated signing service.
+ *
+ * Key features:
+ * - Service Definition: Defines a `Signer` service for handling signing operations.
+ * - RPC Method: Specifies the `SignTransaction` method, which is the sole entry point
+ *   for requesting a signature.
+ * - Message Types: Defines the `SignRequest` message, which carries the necessary
+ *   information to perform a signature (user context and the transaction payload),
+ *   and the `SignResponse` message, which returns the resulting signature.
+ *
+ * @notes
+ * - This file is used by the protobuf compiler (`protoc`) to generate Go code for
+ *   both the server-side implementation and the client-side stub.
+ * - The `payload_json` field is a string, which is expected to be a valid JSON representation
+ *   of an EIP-712 typed data structure.
+ */
+
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/poly-pro/remote-signer/proto";
+
+// The Signer service definition.
+service Signer {
+  // Signs an EIP-712 typed data payload.
+  rpc SignTransaction (SignRequest) returns (SignResponse);
+}
+
+// The request message containing the data to be signed.
+message SignRequest {
+  // The unique identifier of the user for whom the transaction is being signed.
+  // This is used to look up the correct private key from the vault.
+  string user_id = 1;
+
+  // The EIP-712 typed data payload, formatted as a JSON string.
+  string payload_json = 2;
+}
+
+// The response message containing the signature.
+message SignResponse {
+  // The resulting signature as a hexadecimal string.
+  string signature = 1;
+}
+
