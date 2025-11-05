@@ -99,3 +99,20 @@ func (s *UserService) CreateUser(ctx context.Context, clerkUserID string, email 
 	return user, nil
 }
 
+/**
+ * @description
+ * GetUserByClerkID retrieves an existing user from the database by their Clerk user ID.
+ *
+ * @param ctx The context for the database operation.
+ * @param clerkUserID The unique identifier for the user from Clerk.
+ * @returns The user record or an error.
+ */
+func (s *UserService) GetUserByClerkID(ctx context.Context, clerkUserID string) (db.User, error) {
+	user, err := s.store.GetUserByClerkID(ctx, clerkUserID)
+	if err != nil {
+		s.logger.Error("failed to get user by clerk ID", "error", err, "clerk_id", clerkUserID)
+		return db.User{}, err
+	}
+	return user, nil
+}
+

@@ -151,15 +151,32 @@ func (server *Server) handleCreateUserWebhook(c *gin.Context) {
 	}
 
 	// 7. Delegate user creation to the user service.
+	// According to Clerk docs, webhooks should return 2xx status codes for success.
+	// When a user already exists (idempotent operation), we should return 200 OK
+	// to acknowledge the webhook as successful and prevent retries.
 	user, err := server.userService.CreateUser(c.Request.Context(), event.Data.ID, primaryEmail)
 	if err != nil {
-		// The service layer handles logging, so we just need to return the correct HTTP status.
-		// The error from the service layer will indicate if it's a conflict or another server error.
+		// If user already exists, this is an idempotent operation - treat as success
+		// According to Clerk docs: Return 2xx status to acknowledge webhook and prevent retries
 		if err == services.ErrUserAlreadyExists {
-			c.JSON(http.StatusConflict, gin.H{"status": "error", "message": err.Error()})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to create user"})
+			// Fetch the existing user to return in the response
+			existingUser, findErr := server.userService.GetUserByClerkID(c.Request.Context(), event.Data.ID)
+			if findErr != nil {
+				server.logger.Error("failed to fetch existing user after duplicate webhook", "error", findErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to process webhook"})
+				return
+			}
+			server.logger.Info("webhook acknowledged - user already exists (idempotent)", "user_id", existingUser.ID, "clerk_id", event.Data.ID)
+			// Return 200 OK to acknowledge the webhook as successful
+			// This prevents Clerk from retrying the webhook
+			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "User already exists", "data": existingUser})
+			return
 		}
+		
+		// For other errors, return 500 to indicate server error
+		// Clerk will retry these errors according to their retry schedule
+		server.logger.Error("failed to create user from webhook", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to create user"})
 		return
 	}
 
