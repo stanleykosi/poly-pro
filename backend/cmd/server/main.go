@@ -26,6 +26,7 @@ import (
 	"github.com/poly-pro/backend/internal/api"
 	"github.com/poly-pro/backend/internal/config"
 	db "github.com/poly-pro/backend/internal/db"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -65,14 +66,34 @@ func main() {
 	logger.Info("database connection established")
 
 	// ------------------------------------------------------------------
+	// Redis Connection
+	// ------------------------------------------------------------------
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		logger.Error("cannot parse redis URL", "error", err)
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
+		logger.Error("redis ping failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("redis connection established")
+	defer redisClient.Close()
+
+	// Create a root context that can be cancelled to trigger shutdown of background services
+	rootCtx, cancelRootCtx := context.WithCancel(context.Background())
+	defer cancelRootCtx()
+
+	// ------------------------------------------------------------------
 	// Server Initialization
 	// ------------------------------------------------------------------
 	// Create a new instance of our database store using the connection pool.
 	// This provides our API handlers with a way to query the database.
 	store := db.New(connPool)
 
-	// Create a new server instance, passing in the configuration and database store.
-	server := api.NewServer(cfg, store)
+	// Create a new server instance, passing in the context, configuration, database store, and redis client.
+	server := api.NewServer(rootCtx, cfg, store, redisClient)
 
 	// Create a new HTTP server based on the Gin router.
 	httpServer := &http.Server{
@@ -106,13 +127,16 @@ func main() {
 	case sig := <-shutdownChannel:
 		logger.Info("shutdown signal received", "signal", sig)
 
+		// Cancel the root context to signal background goroutines (like the Hub) to stop.
+		cancelRootCtx()
+
 		// Create a context with a timeout to allow for graceful shutdown.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
 
 		// Attempt to gracefully shut down the server.
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			logger.Error("graceful shutdown failed", "error", err)
+			logger.Error("graceful http server shutdown failed", "error", err)
 			os.Exit(1)
 		}
 
@@ -120,8 +144,6 @@ func main() {
 		if err := server.Close(); err != nil {
 			logger.Error("failed to close server resources", "error", err)
 		}
-
-		logger.Info("server shutdown complete")
 	}
 
 	logger.Info("application has shut down")

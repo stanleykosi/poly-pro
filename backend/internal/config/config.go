@@ -29,6 +29,7 @@ type Config struct {
 	ClerkSecretKey      string
 	ClerkIssuerURL      string
 	RemoteSignerAddress string // Added for gRPC client
+	RedisURL            string // Added for Redis connection
 }
 
 /**
@@ -71,6 +72,7 @@ func LoadConfig(path string) (config Config, err error) {
 	config.ClerkSecretKey = os.Getenv("CLERK_SECRET_KEY")
 	config.ClerkIssuerURL = os.Getenv("CLERK_ISSUER_URL")
 	config.RemoteSignerAddress = os.Getenv("REMOTE_SIGNER_ADDRESS")
+	config.RedisURL = os.Getenv("REDIS_URL")
 
 	// Validate that critical variables are not empty
 	if config.DatabaseURL == "" {
@@ -84,6 +86,9 @@ func LoadConfig(path string) (config Config, err error) {
 	}
 	if config.RemoteSignerAddress == "" {
 		return Config{}, errors.New("REMOTE_SIGNER_ADDRESS is not set")
+	}
+	if config.RedisURL == "" {
+		return Config{}, errors.New("REDIS_URL is not set")
 	}
 
 	return

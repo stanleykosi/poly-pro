@@ -14,6 +14,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,32 +24,39 @@ import (
 	"github.com/poly-pro/backend/internal/config"
 	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/services"
+	"github.com/poly-pro/backend/internal/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 // Server serves HTTP requests for the Poly-Pro Analytics backend service.
 type Server struct {
-	config            config.Config
-	store             db.Querier
-	Router            *gin.Engine
-	logger            *slog.Logger
-	userService       *services.UserService
-	polymarketService *services.PolymarketService
-	signerClient      services.SignerClient
+	config              config.Config
+	store               db.Querier
+	Router              *gin.Engine
+	logger              *slog.Logger
+	userService         *services.UserService
+	polymarketService   *services.PolymarketService
+	marketStreamService *services.MarketStreamService
+	signerClient        services.SignerClient
+	hub                 *websocket.Hub
+	redisClient         *redis.Client
 }
 
 /**
  * @description
- * NewServer creates a new HTTP server and sets up all the necessary routing.
+ * NewServer creates a new HTTP server and sets up all the necessary routing and services.
  *
+ * @param ctx The root context for the server, used for graceful shutdown.
  * @param config The application configuration.
  * @param store The database querier for database operations.
+ * @param redisClient The client for connecting to Redis.
  * @returns A pointer to a new Server instance.
  *
  * @notes
- * - This function encapsulates the entire setup of the Gin router, making it easy
- *   to instantiate the server from the main application entry point.
+ * - This function encapsulates the entire setup of the Gin router and related services,
+ *   making it easy to instantiate the server from the main application entry point.
  */
-func NewServer(config config.Config, store db.Querier) *Server {
+func NewServer(ctx context.Context, config config.Config, store db.Querier, redisClient *redis.Client) *Server {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Initialize gRPC client for the remote signer
@@ -61,15 +69,22 @@ func NewServer(config config.Config, store db.Querier) *Server {
 	// Initialize services
 	userService := services.NewUserService(store, logger)
 	polymarketService := services.NewPolymarketService(store, logger, signerClient)
+	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient)
+
+	// Initialize the WebSocket Hub
+	hub := websocket.NewHub(ctx, logger, redisClient)
 
 	// Initialize a new Server instance
 	server := &Server{
-		config:            config,
-		store:             store,
-		logger:            logger,
-		userService:       userService,
-		polymarketService: polymarketService,
-		signerClient:      signerClient,
+		config:              config,
+		store:               store,
+		logger:              logger,
+		userService:         userService,
+		polymarketService:   polymarketService,
+		marketStreamService: marketStreamService,
+		signerClient:        signerClient,
+		hub:                 hub,
+		redisClient:         redisClient,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -90,6 +105,10 @@ func NewServer(config config.Config, store db.Querier) *Server {
 	v1 := router.Group("/api/v1")
 	{
 		// --- Public Routes ---
+		// WebSocket route - does not require JWT auth for connection,
+		// but could be implemented to require it.
+		v1.GET("/ws", server.serveWs)
+
 		// Webhook routes are public but should have their own verification logic.
 		webhookGroup := v1.Group("/webhooks")
 		{
@@ -127,6 +146,11 @@ func NewServer(config config.Config, store db.Querier) *Server {
 
 	// Attach the configured router to our server instance
 	server.Router = router
+
+	// Start the WebSocket hub and market stream service in the background.
+	go server.hub.Run()
+	go server.marketStreamService.RunMockStream()
+
 	return server
 }
 
@@ -137,7 +161,16 @@ func NewServer(config config.Config, store db.Querier) *Server {
  */
 func (s *Server) Close() error {
 	if s.signerClient != nil {
-		return s.signerClient.Close()
+		if err := s.signerClient.Close(); err != nil {
+			s.logger.Error("failed to close signer client", "error", err)
+			return err
+		}
+	}
+	if s.redisClient != nil {
+		if err := s.redisClient.Close(); err != nil {
+			s.logger.Error("failed to close redis client", "error", err)
+			return err
+		}
 	}
 	return nil
 }
