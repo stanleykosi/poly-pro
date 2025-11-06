@@ -28,6 +28,7 @@ package polymarket
 import (
 	"math/big"
 
+	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 )
 
@@ -35,7 +36,7 @@ import (
 var PolymarketEIP712Domain = apitypes.TypedDataDomain{
 	Name:              "Polymarket CLOB",
 	Version:           "1",
-	ChainId:           137, // Polygon Mainnet
+	ChainId:           math.NewHexOrDecimal256(137), // Polygon Mainnet
 	VerifyingContract: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
 }
 

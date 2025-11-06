@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/polymarket"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
