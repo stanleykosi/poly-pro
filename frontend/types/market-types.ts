@@ -50,6 +50,18 @@ export interface MarketData {
 }
 
 /**
+ * @interface Market
+ * @description Represents the static, non-real-time data for a single market.
+ * This data is typically fetched once when the market page is loaded.
+ */
+export interface Market {
+  id: string
+  title: string
+  description: string
+  resolution_source: string
+}
+
+/**
  * @interface WebSocketBookMessage
  * @description Defines the shape of the `book` event message received from the backend WebSocket service.
  * This corresponds to the `MockOrderBookData` struct on the backend.

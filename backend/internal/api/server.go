@@ -23,6 +23,7 @@ import (
 	"github.com/poly-pro/backend/internal/auth"
 	"github.com/poly-pro/backend/internal/config"
 	db "github.com/poly-pro/backend/internal/db"
+	"github.com/poly-pro/backend/internal/polymarket"
 	"github.com/poly-pro/backend/internal/services"
 	"github.com/poly-pro/backend/internal/websocket"
 	"github.com/redis/go-redis/v9"
@@ -40,6 +41,7 @@ type Server struct {
 	signerClient        services.SignerClient
 	hub                 *websocket.Hub
 	redisClient         *redis.Client
+	gammaClient         *polymarket.GammaAPIClient
 }
 
 /**
@@ -66,10 +68,13 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		os.Exit(1)
 	}
 
+	// Initialize Gamma API client
+	gammaClient := polymarket.NewGammaAPIClient(config.GammaAPIURL, logger)
+
 	// Initialize services
 	userService := services.NewUserService(store, logger)
-	polymarketService := services.NewPolymarketService(store, logger, signerClient)
-	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient)
+	polymarketService := services.NewPolymarketService(store, logger, signerClient, config)
+	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient, config)
 
 	// Initialize the WebSocket Hub
 	hub := websocket.NewHub(ctx, logger, redisClient)
@@ -85,6 +90,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		signerClient:        signerClient,
 		hub:                 hub,
 		redisClient:         redisClient,
+		gammaClient:         gammaClient,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -108,6 +114,9 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		// WebSocket route - does not require JWT auth for connection,
 		// but could be implemented to require it.
 		v1.GET("/ws", server.serveWs)
+
+		// Endpoint to get static details for a market. This is public data.
+		v1.GET("/markets/:id", server.getMarketDetails)
 
 		// Webhook routes are public but should have their own verification logic.
 		webhookGroup := v1.Group("/webhooks")
@@ -149,7 +158,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 
 	// Start the WebSocket hub and market stream service in the background.
 	go server.hub.Run()
-	go server.marketStreamService.RunMockStream()
+	go server.marketStreamService.RunStream()
 
 	return server
 }

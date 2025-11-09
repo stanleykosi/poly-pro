@@ -30,6 +30,13 @@ type Config struct {
 	ClerkIssuerURL      string
 	RemoteSignerAddress string // Added for gRPC client
 	RedisURL            string // Added for Redis connection
+	// Polymarket API configuration
+	GammaAPIURL         string // Gamma API base URL (defaults to https://gamma-api.polymarket.com)
+	CLOBAPIURL          string // CLOB API base URL (defaults to https://clob.polymarket.com)
+	CLOBWSURL           string // CLOB WebSocket URL (defaults to wss://ws-subscriptions-clob.polymarket.com)
+	CLOBAPIKey          string // CLOB API key (required for trading operations)
+	CLOBAPISecret       string // CLOB API secret (required for trading operations)
+	CLOBAPIPassphrase   string // CLOB API passphrase (required for trading operations)
 }
 
 /**
@@ -73,6 +80,14 @@ func LoadConfig(path string) (config Config, err error) {
 	config.ClerkIssuerURL = os.Getenv("CLERK_ISSUER_URL")
 	config.RemoteSignerAddress = os.Getenv("REMOTE_SIGNER_ADDRESS")
 	config.RedisURL = os.Getenv("REDIS_URL")
+	
+	// Polymarket API configuration (optional - defaults provided in clients)
+	config.GammaAPIURL = os.Getenv("GAMMA_API_URL")
+	config.CLOBAPIURL = os.Getenv("CLOB_API_URL")
+	config.CLOBWSURL = os.Getenv("CLOB_WS_URL")
+	config.CLOBAPIKey = os.Getenv("CLOB_API_KEY")
+	config.CLOBAPISecret = os.Getenv("CLOB_API_SECRET")
+	config.CLOBAPIPassphrase = os.Getenv("CLOB_API_PASSPHRASE")
 
 	// Validate that critical variables are not empty
 	if config.DatabaseURL == "" {
@@ -90,6 +105,9 @@ func LoadConfig(path string) (config Config, err error) {
 	if config.RedisURL == "" {
 		return Config{}, errors.New("REDIS_URL is not set")
 	}
+	
+	// Note: CLOB API credentials are optional - only needed for trading operations
+	// Market data fetching via Gamma API does not require authentication
 
 	return
 }

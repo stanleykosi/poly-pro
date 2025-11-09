@@ -27,12 +27,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	db "github.com/poly-pro/backend/internal/db"
+	"github.com/poly-pro/backend/internal/config"
 	"github.com/poly-pro/backend/internal/polymarket"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 )
@@ -52,14 +54,24 @@ type PolymarketService struct {
 	store        db.Querier
 	logger       *slog.Logger
 	signerClient SignerClient
+	clobClient   *polymarket.CLOBAPIClient
+	config       config.Config
 }
 
 // NewPolymarketService creates a new instance of the PolymarketService.
-func NewPolymarketService(store db.Querier, logger *slog.Logger, signerClient SignerClient) *PolymarketService {
+func NewPolymarketService(store db.Querier, logger *slog.Logger, signerClient SignerClient, cfg config.Config) *PolymarketService {
+	// Initialize CLOB API client if credentials are provided
+	var clobClient *polymarket.CLOBAPIClient
+	if cfg.CLOBAPIKey != "" && cfg.CLOBAPISecret != "" && cfg.CLOBAPIPassphrase != "" {
+		clobClient = polymarket.NewCLOBAPIClient(cfg.CLOBAPIURL, cfg.CLOBAPIKey, cfg.CLOBAPISecret, cfg.CLOBAPIPassphrase, logger)
+	}
+
 	return &PolymarketService{
 		store:        store,
 		logger:       logger,
 		signerClient: signerClient,
+		clobClient:   clobClient,
+		config:       cfg,
 	}
 }
 
@@ -175,9 +187,24 @@ func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params Place
 
 	s.logger.Info("order successfully signed", "user_id", params.UserID, "signature", signedOrder.Signature)
 
-	// For the MVP, we are not submitting to Polymarket yet. We just return the signed order.
-	// In the future, this is where we would make the HTTP POST request to the Polymarket CLOB API.
-	// e.g., polymarketAPI.SubmitOrder(ctx, signedOrder)
+	// Submit the order to Polymarket's CLOB API if CLOB client is configured
+	if s.clobClient != nil {
+		orderResp, err := s.clobClient.PostOrder(ctx, signedOrder, "GTC") // Default to Good-Till-Cancelled
+		if err != nil {
+			s.logger.Error("failed to submit order to CLOB API", "error", err, "user_id", params.UserID)
+			return nil, fmt.Errorf("failed to submit order: %w", err)
+		}
+
+		if !orderResp.Success {
+			s.logger.Warn("order submission failed", "error_msg", orderResp.ErrorMsg, "status", orderResp.Status)
+			return nil, fmt.Errorf("order submission failed: %s", orderResp.ErrorMsg)
+		}
+
+		s.logger.Info("order successfully submitted to CLOB API", "order_id", orderResp.OrderID, "status", orderResp.Status)
+		
+		// Store the order ID in the signed order for reference
+		// Note: You may want to extend SignedOrder to include orderId
+	}
 
 	return signedOrder, nil
 }
