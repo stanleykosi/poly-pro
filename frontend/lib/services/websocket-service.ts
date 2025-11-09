@@ -114,10 +114,14 @@ class WebSocketService {
 
   private handleOpen = () => {
     console.log('[WebSocket] Connection established.')
-    // If there are any pending subscriptions, send them now.
-    if (this.subscriptions.size > 0) {
-      this.sendSubscriptionMessage(Array.from(this.subscriptions), 'subscribe')
-    }
+    // Use requestAnimationFrame to ensure WebSocket is fully ready before sending
+    // This prevents the "Still in CONNECTING state" error
+    requestAnimationFrame(() => {
+      // Double-check readyState before sending
+      if (this.ws?.readyState === WebSocket.OPEN && this.subscriptions.size > 0) {
+        this.sendSubscriptionMessage(Array.from(this.subscriptions), 'subscribe')
+      }
+    })
   }
 
   private handleMessage = (event: MessageEvent) => {
@@ -155,12 +159,30 @@ class WebSocketService {
   // --- Private Helper Methods ---
 
   private sendSubscriptionMessage(marketIds: string[], type: 'subscribe' | 'unsubscribe') {
+    // Ensure WebSocket is in OPEN state before sending
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn(`[WebSocket] Cannot send ${type} message: WebSocket is not open`, {
+        readyState: this.ws?.readyState,
+        states: {
+          CONNECTING: WebSocket.CONNECTING,
+          OPEN: WebSocket.OPEN,
+          CLOSING: WebSocket.CLOSING,
+          CLOSED: WebSocket.CLOSED,
+        },
+      })
+      return
+    }
+
     const message = {
       type,
       market_ids: marketIds,
     }
-    this.ws?.send(JSON.stringify(message))
-    console.log(`[WebSocket] Sent ${type} for markets:`, marketIds)
+    try {
+      this.ws.send(JSON.stringify(message))
+      console.log(`[WebSocket] Sent ${type} for markets:`, marketIds)
+    } catch (error) {
+      console.error(`[WebSocket] Failed to send ${type} message:`, error)
+    }
   }
 }
 
