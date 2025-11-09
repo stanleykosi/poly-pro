@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/poly-pro/backend/internal/api"
 	"github.com/poly-pro/backend/internal/config"
@@ -30,6 +31,11 @@ import (
 )
 
 func main() {
+	// Set Gin to release mode for production (unless explicitly set to debug)
+	if os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	// Initialize a structured logger for better log management.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 

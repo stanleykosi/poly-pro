@@ -166,25 +166,40 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				continue
 			}
 
-			// Parse the message
-			var wsMsg WebSocketMessage
-			if err := json.Unmarshal(message, &wsMsg); err != nil {
-				c.logger.Warn("failed to parse WebSocket message", "error", err, "message", string(message))
-				continue
-			}
-
-			// Handle book messages
-			if wsMsg.EventType == "book" {
-				var bookMsg BookMessage
-				if err := json.Unmarshal(message, &bookMsg); err != nil {
-					c.logger.Warn("failed to parse book message", "error", err)
-					continue
-				}
-
+			// Try to parse as book message directly first (most common case)
+			var bookMsg BookMessage
+			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
+				// Successfully parsed as book message
 				if err := handler(&bookMsg); err != nil {
 					c.logger.Error("error handling book message", "error", err)
 				}
+				continue
 			}
+
+			// Try to parse as WebSocketMessage wrapper
+			var wsMsg WebSocketMessage
+			if err := json.Unmarshal(message, &wsMsg); err == nil {
+				// Check if it's a book message in the wrapper
+				if wsMsg.EventType == "book" {
+					if err := json.Unmarshal(wsMsg.Data, &bookMsg); err == nil {
+						if err := handler(&bookMsg); err != nil {
+							c.logger.Error("error handling book message", "error", err)
+						}
+						continue
+					}
+				}
+				// Other message types (subscription confirmations, errors, etc.) - just log and continue
+				c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+				continue
+			}
+
+			// If we can't parse it at all, log the raw message for debugging
+			// This helps identify new message types from Polymarket
+			msgStr := string(message)
+			if len(msgStr) > 200 {
+				msgStr = msgStr[:200] + "..."
+			}
+			c.logger.Debug("received unparseable WebSocket message, skipping", "message_preview", msgStr, "message_length", len(string(message)))
 		}
 	}
 }
