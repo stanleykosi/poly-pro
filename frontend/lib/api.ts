@@ -25,7 +25,13 @@ import axios from 'axios'
 
 // Get the backend API URL from environment variables.
 // The NEXT_PUBLIC_ prefix is required for the variable to be exposed to the browser.
-const baseURL = process.env.NEXT_PUBLIC_API_URL
+let baseURL = process.env.NEXT_PUBLIC_API_URL
+
+// Ensure the API URL doesn't already end with /api/v1
+// Remove trailing slashes and /api/v1 if present
+if (baseURL) {
+  baseURL = baseURL.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '')
+}
 
 // Create a new Axios instance with the base URL configured.
 // If baseURL is undefined, Axios will use relative URLs (acceptable for development).

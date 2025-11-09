@@ -43,8 +43,13 @@ async function getMarketData(slug: string): Promise<Market | null> {
     return null
   }
 
+  // Ensure the API URL doesn't already end with /api/v1
+  // Remove trailing slashes and /api/v1 if present
+  const baseUrl = apiUrl.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '')
+  const endpoint = `${baseUrl}/api/v1/markets/${slug}`
+
   try {
-    const res = await fetch(`${apiUrl}/api/v1/markets/${slug}`, {
+    const res = await fetch(endpoint, {
       // Use a short cache lifetime for market data, as details could change.
       // Revalidating every 60 seconds is a reasonable starting point.
       next: { revalidate: 60 },
