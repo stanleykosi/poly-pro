@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/poly-pro/backend/internal/config"
@@ -130,28 +131,83 @@ func (s *MarketStreamService) RunStream() {
 				"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
 			}
 		} else {
+			// Log first market structure for debugging
+			if len(markets) > 0 {
+				firstMarket := markets[0]
+				// Marshal to JSON to see actual structure
+				marketJSON, _ := json.Marshal(firstMarket)
+				s.logger.Info("sample market structure from Gamma API", 
+					"market_id", firstMarket.ConditionID,
+					"has_clobTokenIds", firstMarket.ClobTokenIds != "",
+					"clobTokenIds", firstMarket.ClobTokenIds,
+					"tokens_count", len(firstMarket.Tokens),
+					"market_json", string(marketJSON))
+			}
+			
 			// Extract token IDs from markets
-			// Each market has tokens (YES/NO), we'll subscribe to the YES token (first token)
-			for _, market := range markets {
-				if len(market.Tokens) > 0 {
-					// Use the first token (typically YES token)
-					// TokenID is the asset ID we need for CLOB WebSocket subscription
-					assetIDs = append(assetIDs, market.Tokens[0].TokenID)
+			// Try multiple methods to get token IDs:
+			// 1. Use clobTokenIds field (preferred - comma-separated or JSON array)
+			// 2. Fall back to Tokens array if clobTokenIds is empty
+			for i, market := range markets {
+				var tokenIDs []string
+				
+				// Method 1: Try clobTokenIds field (most reliable)
+				if market.ClobTokenIds != "" {
+					s.logger.Info("found clobTokenIds", "market_id", market.ConditionID, "clobTokenIds", market.ClobTokenIds)
+					// Try parsing as JSON array first
+					var jsonArray []string
+					if err := json.Unmarshal([]byte(market.ClobTokenIds), &jsonArray); err == nil {
+						// Successfully parsed as JSON array
+						tokenIDs = jsonArray
+						s.logger.Info("parsed clobTokenIds as JSON array", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
+					} else {
+						// Try parsing as comma-separated string
+						parts := strings.Split(market.ClobTokenIds, ",")
+						for _, part := range parts {
+							trimmed := strings.TrimSpace(part)
+							if trimmed != "" {
+								tokenIDs = append(tokenIDs, trimmed)
+							}
+						}
+						s.logger.Info("parsed clobTokenIds as comma-separated", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
+					}
 				}
+				
+				// Method 2: Fall back to Tokens array if clobTokenIds didn't work
+				if len(tokenIDs) == 0 && len(market.Tokens) > 0 {
+					s.logger.Info("using Tokens array", "market_id", market.ConditionID, "token_count", len(market.Tokens))
+					for j, token := range market.Tokens {
+						s.logger.Info("token details", "market_id", market.ConditionID, "token_index", j, "token_id", token.TokenID, "outcome", token.Outcome)
+						if token.TokenID != "" {
+							tokenIDs = append(tokenIDs, token.TokenID)
+						}
+					}
+				}
+				
+				// Log if no token IDs found for this market
+				if len(tokenIDs) == 0 {
+					s.logger.Warn("no token IDs found for market", 
+						"market_id", market.ConditionID,
+						"market_index", i,
+						"has_clobTokenIds", market.ClobTokenIds != "",
+						"clobTokenIds", market.ClobTokenIds,
+						"tokens_count", len(market.Tokens))
+				} else {
+					s.logger.Info("extracted token IDs for market", "market_id", market.ConditionID, "token_count", len(tokenIDs), "token_ids", tokenIDs)
+				}
+				
+				// Add all token IDs found for this market
+				assetIDs = append(assetIDs, tokenIDs...)
 			}
 			s.logger.Info("extracted token IDs from Gamma API markets", "market_count", len(markets), "token_count", len(assetIDs))
 		}
 	} else {
-		// Fallback to hardcoded markets if Gamma client is not available
-		s.logger.Warn("Gamma client not available, using hardcoded markets")
-		assetIDs = []string{
-			"114304586861386186441621124384163963092522056897081085884483958561365015034812", // Xi Jinping market YES token
-			"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
-		}
+		s.logger.Error("Gamma client not available - cannot fetch markets")
+		return
 	}
 
 	if len(assetIDs) == 0 {
-		s.logger.Error("no asset IDs to subscribe to")
+		s.logger.Error("no asset IDs to subscribe to - markets fetched but no token IDs extracted")
 		return
 	}
 

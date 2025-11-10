@@ -65,6 +65,7 @@ type GammaMarket struct {
 	Image            string    `json:"image"`
 	Icon             string    `json:"icon"`
 	Tokens           []Token   `json:"tokens"`
+	ClobTokenIds     string    `json:"clobTokenIds"` // Comma-separated or JSON array string of token IDs
 	CreatedAt        string    `json:"createdAt"`
 	UpdatedAt        string    `json:"updatedAt"`
 }
