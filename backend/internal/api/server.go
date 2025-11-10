@@ -96,6 +96,45 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 	// Initialize the Gin router with default middleware (logger and recovery)
 	router := gin.Default()
 
+	// Add CORS middleware
+	router.Use(func(c *gin.Context) {
+		origin := c.Request.Header.Get("Origin")
+		// Allow requests from localhost (development) and production frontend
+		// List of allowed origins
+		allowedOrigins := []string{
+			"http://localhost:3000",
+			"http://localhost:3001",
+			"https://poly-pro-production.up.railway.app",
+		}
+		
+		// Check if origin is in allowed list
+		allowed := false
+		for _, allowedOrigin := range allowedOrigins {
+			if origin == allowedOrigin {
+				allowed = true
+				break
+			}
+		}
+		
+		if allowed && origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else if origin == "" {
+			// No origin header (e.g., same-origin request or Postman)
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
 	// ------------------------------------------------------------------
 	// Route Definitions
 	// ------------------------------------------------------------------

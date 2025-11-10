@@ -35,6 +35,7 @@ import {
   Time,
   MarkerPosition,
   MarkerShape,
+  CandlestickSeries,
 } from 'lightweight-charts'
 import {
   fetchHistoricalData,
@@ -67,109 +68,224 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
   useEffect(() => {
     if (!containerRef.current) return
 
-    // Initialize the chart
-    const chart = createChart(containerRef.current, {
-      layout: {
-        background: { color: '#0D1117' },
-        textColor: '#C9D1D9',
-      },
-      grid: {
-        vertLines: { color: '#161B22' },
-        horzLines: { color: '#161B22' },
-      },
-      width: containerRef.current.clientWidth,
-      height: 400,
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      rightPriceScale: {
-        borderColor: '#161B22',
-      },
-    })
+    // Store the cleanup function
+    let cleanup: (() => void) | undefined
 
-    chartRef.current = chart
-
-    // Create candlestick series
-    const candlestickSeries = chart.addCandlestickSeries({
-      upColor: '#3FB950',
-      downColor: '#F85149',
-      borderVisible: false,
-      wickUpColor: '#3FB950',
-      wickDownColor: '#F85149',
-    })
-
-    seriesRef.current = candlestickSeries
-
-    // Load historical data
-    const loadHistoricalData = async () => {
-      try {
-        setIsLoading(true)
-        setError(null)
-
-        // Calculate time range (last 30 days)
-        const to = Math.floor(Date.now() / 1000) // Current time in seconds
-        const from = to - 30 * 24 * 60 * 60 // 30 days ago
-
-        const bars = await fetchHistoricalData(
-          marketId,
-          from,
-          to,
-          resolution
-        )
-
-        if (bars.length === 0) {
-          setError('No historical data available')
-          setIsLoading(false)
-          return
+    // Ensure container has dimensions before creating chart
+    const container = containerRef.current
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      // Wait for next frame to ensure container is rendered
+      requestAnimationFrame(() => {
+        if (container.clientWidth > 0 && container.clientHeight > 0 && containerRef.current) {
+          cleanup = initializeChart()
         }
-
-        // Set data to the series
-        candlestickSeries.setData(bars as CandlestickData[])
-
-        // Store the last bar for real-time updates
-        const lastBar = bars[bars.length - 1]
-        subscriptionIdRef.current = subscribeToRealtimeUpdates(
-          marketId,
-          candlestickSeries,
-          lastBar
-        )
-
-        // Add news event markers
-        addNewsMarkers(candlestickSeries, newsEvents)
-
-        setIsLoading(false)
-      } catch (err) {
-        console.error('Failed to load historical data:', err)
-        setError('Failed to load chart data')
-        setIsLoading(false)
-      }
+      })
+    } else {
+      cleanup = initializeChart()
     }
 
-    loadHistoricalData()
+    function initializeChart() {
+      if (!containerRef.current) return
 
-    // Handle window resize
-    const handleResize = () => {
-      if (containerRef.current && chart) {
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
+      // Initialize the chart
+      const chart = createChart(containerRef.current, {
+        layout: {
+          background: { color: '#0D1117' },
+          textColor: '#C9D1D9',
+        },
+        grid: {
+          vertLines: { color: '#161B22' },
+          horzLines: { color: '#161B22' },
+        },
+        width: containerRef.current.clientWidth,
+        height: 400,
+        timeScale: {
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        rightPriceScale: {
+          borderColor: '#161B22',
+        },
+      })
+
+      // Verify chart was created successfully
+      if (!chart) {
+        console.error('Chart initialization failed - chart is null')
+        setError('Failed to initialize chart')
+        setIsLoading(false)
+        return
+      }
+
+      chartRef.current = chart
+
+      // Create candlestick series
+      // Try addCandlestickSeries first (convenience method), fall back to addSeries if not available
+      let candlestickSeries: ISeriesApi<'Candlestick'>
+      
+      if (typeof (chart as any).addCandlestickSeries === 'function') {
+        // Use convenience method if available
+        candlestickSeries = (chart as any).addCandlestickSeries({
+          upColor: '#3FB950',
+          downColor: '#F85149',
+          borderVisible: false,
+          wickUpColor: '#3FB950',
+          wickDownColor: '#F85149',
         })
+      } else if (typeof chart.addSeries === 'function') {
+        // Use addSeries with CandlestickSeries definition
+        candlestickSeries = chart.addSeries(CandlestickSeries, {
+          upColor: '#3FB950',
+          downColor: '#F85149',
+          borderVisible: false,
+          wickUpColor: '#3FB950',
+          wickDownColor: '#F85149',
+        })
+      } else {
+        // Get all methods from prototype chain for debugging
+        const chartProto = Object.getPrototypeOf(chart)
+        const allMethods = Object.getOwnPropertyNames(chartProto).filter(
+          (name) => typeof chart[name as keyof typeof chart] === 'function'
+        )
+        const seriesMethods = allMethods.filter((name) => name.includes('Series'))
+        
+        console.error('Neither addCandlestickSeries nor addSeries available on chart object', {
+          chartType: typeof chart,
+          chartConstructor: chart.constructor?.name,
+          hasAddCandlestickSeries: 'addCandlestickSeries' in chart,
+          hasAddSeries: 'addSeries' in chart,
+          seriesMethods: seriesMethods,
+          allMethods: allMethods.slice(0, 20), // First 20 methods
+        })
+        setError('Chart API not available')
+        setIsLoading(false)
+        return
       }
+
+      seriesRef.current = candlestickSeries
+
+      // Load historical data
+      const loadHistoricalData = async () => {
+        try {
+          setIsLoading(true)
+          setError(null)
+
+          // Calculate time range (last 30 days)
+          const to = Math.floor(Date.now() / 1000) // Current time in seconds
+          const from = to - 30 * 24 * 60 * 60 // 30 days ago
+
+          const bars = await fetchHistoricalData(
+            marketId,
+            from,
+            to,
+            resolution
+          )
+
+          let lastBar: BarData | null = null
+
+          if (bars.length > 0) {
+            // Set data to the series
+            candlestickSeries.setData(bars as CandlestickData[])
+            lastBar = bars[bars.length - 1]
+          } else {
+            // No historical data - create an empty initial bar that will be updated by real-time data
+            // This allows the chart to work even if the database is empty
+            const currentTime = Math.floor(Date.now() / 1000) as Time
+            lastBar = {
+              time: currentTime,
+              open: 0,
+              high: 0,
+              low: 0,
+              close: 0,
+              volume: 0,
+            }
+            // Set empty data to initialize the series
+            candlestickSeries.setData([])
+          }
+
+          // Subscribe to real-time updates (even if no historical data)
+          // The subscription will update the chart as data comes in
+          subscriptionIdRef.current = subscribeToRealtimeUpdates(
+            marketId,
+            candlestickSeries,
+            lastBar
+          )
+
+          // Add news event markers
+          addNewsMarkers(candlestickSeries, newsEvents)
+
+          setIsLoading(false)
+        } catch (err) {
+          console.error('Failed to load historical data:', err)
+          // Even if historical data fails, try to subscribe to real-time updates
+          const currentTime = Math.floor(Date.now() / 1000) as Time
+          const initialBar: BarData = {
+            time: currentTime,
+            open: 0,
+            high: 0,
+            low: 0,
+            close: 0,
+            volume: 0,
+          }
+          subscriptionIdRef.current = subscribeToRealtimeUpdates(
+            marketId,
+            candlestickSeries,
+            initialBar
+          )
+          setError('Failed to load historical data, but real-time updates are active')
+          setIsLoading(false)
+        }
+      }
+
+      loadHistoricalData()
+
+      // Handle window resize
+      const handleResize = () => {
+        if (containerRef.current && chart) {
+          chart.applyOptions({
+            width: containerRef.current.clientWidth,
+          })
+        }
+      }
+
+      window.addEventListener('resize', handleResize)
+
+      // Store cleanup function for this chart instance
+      const cleanup = () => {
+        window.removeEventListener('resize', handleResize)
+        if (subscriptionIdRef.current) {
+          unsubscribeFromRealtimeUpdates(marketId)
+        }
+        if (chart) {
+          chart.remove()
+        }
+      }
+
+      // Return cleanup function to be called when component unmounts or dependencies change
+      return cleanup
     }
 
-    window.addEventListener('resize', handleResize)
-
-    // Cleanup function
+    // Cleanup function for useEffect
     return () => {
-      window.removeEventListener('resize', handleResize)
+      if (cleanup) {
+        cleanup()
+      }
       if (subscriptionIdRef.current) {
         unsubscribeFromRealtimeUpdates(marketId)
       }
-      if (chart) {
-        chart.remove()
+      if (chartRef.current) {
+        try {
+          // Check if chart is still valid before removing
+          // In React Strict Mode, effects run twice, so we need to guard against double removal
+          chartRef.current.remove()
+        } catch (error) {
+          // Chart may already be disposed (e.g., in React Strict Mode)
+          console.debug('Chart already disposed or removed:', error)
+        } finally {
+          chartRef.current = null
+        }
       }
     }
-  }, [marketId]) // Re-initialize if marketId changes
+  }, [marketId, newsEvents]) // Re-initialize if marketId or newsEvents changes
 
   // Update news markers when newsEvents prop changes
   useEffect(() => {

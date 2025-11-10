@@ -33,8 +33,21 @@ import { useEffect } from 'react'
 import websocketService from '@/lib/services/websocket-service'
 
 // The WebSocket URL is sourced from environment variables, with a fallback for local development.
-const WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/api/v1/ws'
+// If NEXT_PUBLIC_WS_URL is not set, derive it from NEXT_PUBLIC_API_URL
+function getWebSocketURL(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL
+  }
+  
+  // Derive WebSocket URL from API URL
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+  // Replace http:// with ws:// and https:// with wss://
+  const wsUrl = apiUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+  // Ensure it ends with /api/v1/ws
+  return wsUrl.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '') + '/api/v1/ws'
+}
+
+const WS_URL = getWebSocketURL()
 
 /**
  * @function useMarketSubscription

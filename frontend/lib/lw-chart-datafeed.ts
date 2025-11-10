@@ -65,20 +65,47 @@ useMarketStore.subscribe((state, prevState) => {
           newClose = parseFloat(newMarketData.orderBook.asks[0].price)
         }
 
-        // Update the last bar with the new close price
-        const updatedBar: BarData = {
-          ...sub.lastBar,
-          close: newClose,
-          // Update high/low if the new price exceeds them
-          high: Math.max(sub.lastBar.high, newClose),
-          low: Math.min(sub.lastBar.low, newClose),
+        // Skip if we couldn't get a valid price
+        if (newClose === 0 || isNaN(newClose)) {
+          return
         }
-        sub.lastBar = updatedBar
 
-        // Update the chart series
-        if ('update' in sub.series) {
-          sub.series.update(updatedBar)
+        // Check if this is the first update (bar is empty/initialized with zeros)
+        const isInitialBar = sub.lastBar.open === 0 && sub.lastBar.close === 0 && sub.lastBar.high === 0 && sub.lastBar.low === 0
+
+        let updatedBar: BarData
+
+        if (isInitialBar) {
+          // First real-time update - create a proper bar from the current price
+          const currentTime = Math.floor(Date.now() / 1000) as Time
+          updatedBar = {
+            time: currentTime,
+            open: newClose,
+            high: newClose,
+            low: newClose,
+            close: newClose,
+            volume: 0,
+          }
+          // Add the bar to the series (first bar)
+          if ('setData' in sub.series) {
+            sub.series.setData([updatedBar])
+          }
+        } else {
+          // Update existing bar with new close price
+          updatedBar = {
+            ...sub.lastBar,
+            close: newClose,
+            // Update high/low if the new price exceeds them
+            high: Math.max(sub.lastBar.high, newClose),
+            low: Math.min(sub.lastBar.low, newClose),
+          }
+          // Update the chart series
+          if ('update' in sub.series) {
+            sub.series.update(updatedBar)
+          }
         }
+
+        sub.lastBar = updatedBar
       }
     }
   })
