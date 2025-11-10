@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/poly-pro/backend/internal/api"
 	"github.com/poly-pro/backend/internal/config"
@@ -54,9 +55,21 @@ func main() {
 	// ------------------------------------------------------------------
 	// Database Connection
 	// ------------------------------------------------------------------
+	// Parse the database URL to configure the connection pool
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("cannot parse database URL", "error", err)
+		os.Exit(1)
+	}
+	
+	// Configure to use simple protocol to avoid "prepared statement already exists" errors
+	// This can happen when multiple goroutines use the same connection concurrently
+	// Simple protocol doesn't use prepared statements, avoiding the collision issue
+	poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	
 	// Create a database connection pool. pgxpool is used for its efficiency
 	// and built-in support for connection pooling.
-	connPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	connPool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		logger.Error("cannot connect to the database", "error", err)
 		os.Exit(1)
