@@ -78,12 +78,11 @@ func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp 
 	a.totalUpdates++
 	
 	// Log first few updates to confirm function is being called
-	if a.totalUpdates <= 5 {
-		a.logger.Info("🔄 OHLCV aggregator UpdatePrice called", 
-			"update_number", a.totalUpdates,
+	if a.totalUpdates <= 3 {
+		a.logger.Info("OHLCV aggregator: processing price update", 
+			"update", a.totalUpdates,
 			"market_id", marketID,
-			"price", price,
-			"timestamp", timestamp.Format(time.RFC3339))
+			"price", price)
 	}
 	
 	// Update all resolutions for this market
@@ -117,15 +116,6 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	if !exists || bar.StartTime.Before(barStartTime) {
 		// If the bar doesn't exist or we've moved to a new time period, save the old bar and create a new one
 		if exists {
-			a.logger.Info("bar period complete, saving to database", 
-				"market_id", bar.MarketID, 
-				"resolution", bar.Resolution, 
-				"start_time", bar.StartTime.Format(time.RFC3339),
-				"open", bar.Open,
-				"high", bar.High,
-				"low", bar.Low,
-				"close", bar.Close,
-				"updates_count", bar.Count)
 			if err := a.saveBar(bar); err != nil {
 				return err
 			}
@@ -144,12 +134,9 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
-		a.logger.Info("🆕 created new OHLCV bar", 
+		a.logger.Debug("created new OHLCV bar", 
 			"market_id", marketID, 
-			"resolution", resolution, 
-			"start_time", barStartTime.Format(time.RFC3339),
-			"initial_price", price,
-			"next_save_time", a.getNextSaveTime(barStartTime, resolution).Format(time.RFC3339))
+			"resolution", resolution)
 	}
 
 	// Update the bar with the new price
@@ -162,16 +149,7 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	}
 	bar.Count++
 
-	// Log first few updates per bar to show aggregation is working
-	if bar.Count <= 3 {
-		a.logger.Debug("updating OHLCV bar", 
-			"market_id", marketID, 
-			"resolution", resolution, 
-			"update_count", bar.Count,
-			"current_price", price,
-			"bar_high", bar.High,
-			"bar_low", bar.Low)
-	}
+	// No need to log every update - too verbose
 
 	return nil
 }
@@ -237,16 +215,10 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	}
 
 	a.totalBarsSaved++
-	a.logger.Info("✅ OHLCV bar saved to database", 
+	a.logger.Debug("OHLCV bar saved", 
 		"market_id", bar.MarketID, 
-		"resolution", bar.Resolution, 
-		"time", bar.StartTime.Format(time.RFC3339),
-		"open", bar.Open,
-		"high", bar.High,
-		"low", bar.Low,
-		"close", bar.Close,
-		"updates_count", bar.Count,
-		"total_bars_saved", a.totalBarsSaved)
+		"resolution", bar.Resolution,
+		"total_saved", a.totalBarsSaved)
 	return nil
 }
 
@@ -354,7 +326,7 @@ func (a *OHLCVAggregator) logStatus() {
 	defer a.mu.RUnlock()
 
 	if len(a.bars) == 0 {
-		a.logger.Warn("⚠️  OHLCV aggregator status: no bars in memory - no price updates received yet",
+		a.logger.Warn("⚠️  OHLCV aggregator: no bars in memory",
 			"total_updates", a.totalUpdates,
 			"total_bars_saved", a.totalBarsSaved)
 		return
@@ -362,31 +334,20 @@ func (a *OHLCVAggregator) logStatus() {
 
 	// Count bars by resolution
 	barCounts := make(map[string]int)
-	var barDetails []map[string]interface{}
+	totalBars := 0
 
-	for marketID, resolutions := range a.bars {
-		for resolution, bar := range resolutions {
+	for _, resolutions := range a.bars {
+		for resolution := range resolutions {
 			barCounts[resolution]++
-			nextSaveTime := a.getNextSaveTime(bar.StartTime, resolution)
-			timeUntilSave := time.Until(nextSaveTime)
-			
-			barDetails = append(barDetails, map[string]interface{}{
-				"market_id":      marketID,
-				"resolution":     resolution,
-				"start_time":     bar.StartTime.Format(time.RFC3339),
-				"next_save_time": nextSaveTime.Format(time.RFC3339),
-				"time_until_save": timeUntilSave.String(),
-				"updates_count":  bar.Count,
-				"current_price":  bar.Close,
-			})
+			totalBars++
 		}
 	}
 
 	a.logger.Info("📊 OHLCV aggregator status",
-		"total_updates", a.totalUpdates,
-		"total_bars_saved", a.totalBarsSaved,
-		"active_markets", len(a.bars),
-		"active_bars", barCounts,
-		"bars", barDetails)
+		"updates", a.totalUpdates,
+		"bars_saved", a.totalBarsSaved,
+		"markets", len(a.bars),
+		"active_bars", totalBars,
+		"by_resolution", barCounts)
 }
 

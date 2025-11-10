@@ -174,23 +174,8 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 
 			messageCount++
 
-			// Log first few raw messages to see actual format
-			if messageCount <= 5 {
-				msgStr := string(message)
-				if len(msgStr) > 500 {
-					msgStr = msgStr[:500] + "..."
-				}
-				c.logger.Info("📥 raw WebSocket message received", 
-					"message_number", messageCount,
-					"message_length", len(message),
-					"message_preview", msgStr)
-			}
-
 			// Handle PONG messages
 			if string(message) == "PONG" {
-				if messageCount <= 5 {
-					c.logger.Info("received PONG message")
-				}
 				continue
 			}
 
@@ -199,28 +184,14 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if err := json.Unmarshal(message, &bookMessages); err == nil && len(bookMessages) > 0 {
 				// Successfully parsed as array of book messages
 				if messageCount == 1 {
-					c.logger.Info("✅ successfully parsed first message as array of book messages", 
-						"array_length", len(bookMessages),
-						"first_market", bookMessages[0].Market,
-						"first_asset_id", bookMessages[0].AssetID)
+					c.logger.Info("WebSocket: parsed initial snapshot", 
+						"messages", len(bookMessages))
 				}
 				// Process each book message in the array
 				for i, bookMsg := range bookMessages {
 					if bookMsg.EventType == "book" {
-						if messageCount == 1 && i == 0 {
-							c.logger.Info("✅ processing first book message from array", 
-								"market", bookMsg.Market, 
-								"asset_id", bookMsg.AssetID, 
-								"bids_count", len(bookMsg.Bids), 
-								"asks_count", len(bookMsg.Asks),
-								"timestamp", bookMsg.Timestamp)
-						}
 						if err := handler(&bookMsg); err != nil {
 							c.logger.Error("error handling book message from array", "error", err, "index", i)
-						} else {
-							if messageCount == 1 && i < 3 {
-								c.logger.Info("✅ handler called successfully for book message from array", "message_number", messageCount, "index", i)
-							}
 						}
 					}
 				}
@@ -232,20 +203,10 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
 				// Successfully parsed as book message
 				if messageCount == 1 {
-					c.logger.Info("✅ successfully parsed first book message (direct format)", 
-						"market", bookMsg.Market, 
-						"asset_id", bookMsg.AssetID, 
-						"bids_count", len(bookMsg.Bids), 
-						"asks_count", len(bookMsg.Asks),
-						"timestamp", bookMsg.Timestamp)
+					c.logger.Info("WebSocket: parsed first book message", "market", bookMsg.Market)
 				}
-				c.logger.Debug("received book message", "market", bookMsg.Market, "asset_id", bookMsg.AssetID, "bids_count", len(bookMsg.Bids), "asks_count", len(bookMsg.Asks))
 				if err := handler(&bookMsg); err != nil {
 					c.logger.Error("error handling book message", "error", err)
-				} else {
-					if messageCount <= 5 {
-						c.logger.Info("✅ handler called successfully for book message", "message_number", messageCount)
-					}
 				}
 				continue
 			}
@@ -254,12 +215,8 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			var priceChangeMsg PriceChangeMessage
 			if err := json.Unmarshal(message, &priceChangeMsg); err == nil && priceChangeMsg.EventType == "price_change" {
 				// Successfully parsed as price change event
-				if messageCount <= 5 {
-					c.logger.Info("✅ parsed price_change event", 
-						"market", priceChangeMsg.Market,
-						"asset_id", priceChangeMsg.AssetID,
-						"price", priceChangeMsg.Price,
-						"timestamp", priceChangeMsg.Timestamp)
+				if messageCount == 1 {
+					c.logger.Info("WebSocket: parsed price_change event", "market", priceChangeMsg.Market)
 				}
 				// Convert price_change to a book message with synthetic bids/asks
 				// Use the price as both best bid and best ask for OHLCV aggregation
@@ -279,10 +236,6 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				}
 				if err := handler(&syntheticBookMsg); err != nil {
 					c.logger.Error("error handling price_change converted to book message", "error", err)
-				} else {
-					if messageCount <= 5 {
-						c.logger.Info("✅ handler called successfully for price_change event", "message_number", messageCount)
-					}
 				}
 				continue
 			}
@@ -290,49 +243,24 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			// Try to parse as WebSocketMessage wrapper
 			var wsMsg WebSocketMessage
 			if err := json.Unmarshal(message, &wsMsg); err == nil {
-				if messageCount <= 5 {
-					c.logger.Info("parsed as WebSocketMessage wrapper", 
-						"type", wsMsg.Type, 
-						"event_type", wsMsg.EventType,
-						"has_data", len(wsMsg.Data) > 0)
-				}
 				// Check if it's a book message in the wrapper
 				if wsMsg.EventType == "book" {
 					if err := json.Unmarshal(wsMsg.Data, &bookMsg); err == nil {
 						if messageCount == 1 {
-							c.logger.Info("✅ successfully parsed first book message (wrapped format)", 
-								"market", bookMsg.Market, 
-								"asset_id", bookMsg.AssetID, 
-								"bids_count", len(bookMsg.Bids), 
-								"asks_count", len(bookMsg.Asks),
-								"timestamp", bookMsg.Timestamp)
+							c.logger.Info("WebSocket: parsed wrapped book message", "market", bookMsg.Market)
 						}
 						if err := handler(&bookMsg); err != nil {
 							c.logger.Error("error handling book message", "error", err)
-						} else {
-							if messageCount <= 5 {
-								c.logger.Info("✅ handler called successfully for wrapped book message", "message_number", messageCount)
-							}
 						}
 						continue
-					} else {
-						if messageCount <= 5 {
-							c.logger.Warn("failed to parse book message from wrapper data", 
-								"error", err,
-								"data_preview", string(wsMsg.Data[:min(200, len(wsMsg.Data))]))
-						}
 					}
 				}
 				// Check if it's a price_change event in the wrapper
 				if wsMsg.EventType == "price_change" {
 					var priceChangeMsg PriceChangeMessage
 					if err := json.Unmarshal(wsMsg.Data, &priceChangeMsg); err == nil {
-						if messageCount <= 5 {
-							c.logger.Info("✅ parsed price_change event (wrapped format)", 
-								"market", priceChangeMsg.Market,
-								"asset_id", priceChangeMsg.AssetID,
-								"price", priceChangeMsg.Price,
-								"timestamp", priceChangeMsg.Timestamp)
+						if messageCount == 1 {
+							c.logger.Info("WebSocket: parsed wrapped price_change", "market", priceChangeMsg.Market)
 						}
 						// Convert price_change to a book message with synthetic bids/asks
 						price := priceChangeMsg.Price
@@ -351,53 +279,31 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 						}
 						if err := handler(&syntheticBookMsg); err != nil {
 							c.logger.Error("error handling price_change converted to book message", "error", err)
-						} else {
-							if messageCount <= 5 {
-								c.logger.Info("✅ handler called successfully for wrapped price_change event", "message_number", messageCount)
-							}
 						}
 						continue
-					} else {
-						if messageCount <= 5 {
-							c.logger.Warn("failed to parse price_change from wrapper data", 
-								"error", err,
-								"data_preview", string(wsMsg.Data[:min(200, len(wsMsg.Data))]))
-						}
 					}
 				}
-				// Other message types (subscription confirmations, errors, etc.) - log for debugging
+				// Other message types (subscription confirmations, errors, etc.)
 				if wsMsg.Type == "subscribed" || wsMsg.Type == "subscription" {
-					c.logger.Info("subscription confirmed by WebSocket", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+					c.logger.Info("WebSocket: subscription confirmed", "type", wsMsg.Type)
 				} else {
-					if messageCount <= 5 {
-						c.logger.Info("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
-					} else {
-						c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
-					}
+					c.logger.Debug("WebSocket: non-book message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
 				}
 				continue
 			}
 
 			// If we can't parse it at all, log the raw message for debugging
 			// This helps identify new message types from Polymarket
-			msgStr := string(message)
-			if len(msgStr) > 200 {
-				msgStr = msgStr[:200] + "..."
-			}
 			if messageCount <= 10 {
-				// Try parsing again to get error messages
-				var parseErrDirect, parseErrWrapper error
-				_ = json.Unmarshal(message, &bookMsg)
-				parseErrDirect = json.Unmarshal(message, &bookMsg)
-				parseErrWrapper = json.Unmarshal(message, &wsMsg)
-				c.logger.Warn("⚠️  received unparseable WebSocket message", 
-					"message_number", messageCount,
-					"message_preview", msgStr, 
-					"message_length", len(string(message)),
-					"parse_error_direct", parseErrDirect,
-					"parse_error_wrapper", parseErrWrapper)
+				msgStr := string(message)
+				if len(msgStr) > 200 {
+					msgStr = msgStr[:200] + "..."
+				}
+				c.logger.Warn("WebSocket: unparseable message", 
+					"message", messageCount,
+					"preview", msgStr)
 			} else {
-				c.logger.Debug("received unparseable WebSocket message, skipping", "message_preview", msgStr, "message_length", len(string(message)))
+				c.logger.Debug("WebSocket: unparseable message, skipping", "message", messageCount)
 			}
 		}
 	}

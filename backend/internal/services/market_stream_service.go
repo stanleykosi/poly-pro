@@ -219,16 +219,13 @@ func (s *MarketStreamService) RunStream() {
 	handler := func(bookMsg *polymarket.BookMessage) error {
 		messageCount++
 		if messageCount == 1 {
-			s.logger.Info("✅ first WebSocket message received - subscription confirmed and data flowing", 
-				"market", bookMsg.Market, 
-				"asset_id", bookMsg.AssetID,
-				"bids_count", len(bookMsg.Bids),
-				"asks_count", len(bookMsg.Asks))
+			s.logger.Info("WebSocket: first message received, subscription confirmed", 
+				"market", bookMsg.Market)
 		}
 		
-		// Log every 100th message to show continuous data flow
-		if messageCount%100 == 0 {
-			s.logger.Info("WebSocket messages flowing", "total_messages", messageCount, "market", bookMsg.Market)
+		// Log every 1000th message to show continuous data flow (less frequent)
+		if messageCount%1000 == 0 {
+			s.logger.Info("WebSocket: messages flowing", "total", messageCount)
 		}
 
 		// Convert bids/asks to interface{} for ExtractMidPrice
@@ -249,49 +246,19 @@ func (s *MarketStreamService) RunStream() {
 
 		// Extract mid-price and aggregate OHLCV
 		midPrice := ExtractMidPrice(bids, asks)
-		if messageCount <= 5 {
-			s.logger.Info("extracting mid-price from order book", 
-				"market", bookMsg.Market,
-				"bids_count", len(bids),
-				"asks_count", len(asks),
-				"mid_price", midPrice)
-		}
 		if midPrice > 0 {
 			// Parse timestamp (assuming it's in milliseconds)
 			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 			if err == nil {
 				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
-				if messageCount <= 5 {
-					s.logger.Info("calling OHLCV aggregator UpdatePrice", 
-						"market", bookMsg.Market,
-						"mid_price", midPrice,
-						"timestamp", timestamp.Format(time.RFC3339))
-				}
 				if err := s.ohlcvAggregator.UpdatePrice(bookMsg.Market, midPrice, timestamp); err != nil {
 					s.logger.Error("failed to update OHLCV", "error", err, "market", bookMsg.Market)
-				} else {
-					// Log first few price updates to confirm OHLCV aggregation is working
-					if messageCount <= 5 {
-						s.logger.Info("✅ OHLCV price update processed successfully", 
-							"market", bookMsg.Market, 
-							"mid_price", midPrice, 
-							"timestamp", timestamp.Format(time.RFC3339))
-					}
 				}
 			} else {
 				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
 			}
 		} else {
-			if messageCount <= 5 {
-				s.logger.Warn("⚠️  mid-price is 0, skipping OHLCV update", 
-					"market", bookMsg.Market, 
-					"bids_count", len(bids), 
-					"asks_count", len(asks),
-					"bids", bids,
-					"asks", asks)
-			} else {
-				s.logger.Debug("mid-price is 0, skipping OHLCV update", "market", bookMsg.Market, "bids_count", len(bids), "asks_count", len(asks))
-			}
+			s.logger.Debug("mid-price is 0, skipping OHLCV update", "market", bookMsg.Market)
 		}
 
 		// Convert to our format
