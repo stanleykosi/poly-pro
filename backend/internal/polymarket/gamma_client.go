@@ -173,3 +173,81 @@ func (c *GammaAPIClient) GetMarketBySlug(ctx context.Context, slug string) (*Gam
 	return &market, nil
 }
 
+// ListActiveMarkets fetches all active markets from the Gamma API
+// It supports pagination and filtering to get only active (non-closed) markets
+func (c *GammaAPIClient) ListActiveMarkets(ctx context.Context, limit int, offset int) ([]GammaMarket, error) {
+	apiURL := fmt.Sprintf("%s/markets?closed=false&limit=%d&offset=%d&order=id&ascending=false", 
+		c.baseURL, limit, offset)
+
+	c.logger.Info("fetching active markets from Gamma API", "limit", limit, "offset", offset, "url", apiURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "poly-pro-backend/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("failed to fetch markets from Gamma API", "error", err)
+		return nil, fmt.Errorf("failed to fetch markets: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var gammaErr GammaError
+		if err := json.Unmarshal(body, &gammaErr); err == nil {
+			return nil, fmt.Errorf("Gamma API error: %s", gammaErr.Error)
+		}
+		return nil, fmt.Errorf("Gamma API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var markets []GammaMarket
+	if err := json.Unmarshal(body, &markets); err != nil {
+		return nil, fmt.Errorf("failed to parse markets response: %w", err)
+	}
+
+	c.logger.Info("fetched markets from Gamma API", "count", len(markets))
+	return markets, nil
+}
+
+// GetAllActiveMarkets fetches all active markets by paginating through the API
+// It continues fetching until no more markets are returned
+func (c *GammaAPIClient) GetAllActiveMarkets(ctx context.Context) ([]GammaMarket, error) {
+	var allMarkets []GammaMarket
+	limit := 100 // Maximum per page
+	offset := 0
+
+	for {
+		markets, err := c.ListActiveMarkets(ctx, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(markets) == 0 {
+			break // No more markets
+		}
+
+		allMarkets = append(allMarkets, markets...)
+		offset += limit
+
+		// If we got fewer than the limit, we've reached the end
+		if len(markets) < limit {
+			break
+		}
+
+		// Add a small delay to respect rate limits
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	c.logger.Info("fetched all active markets", "total_count", len(allMarkets))
+	return allMarkets, nil
+}
+

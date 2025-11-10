@@ -87,7 +87,8 @@ CREATE TABLE market_price_history (
     high DECIMAL NOT NULL,
     low DECIMAL NOT NULL,
     close DECIMAL NOT NULL,
-    volume DECIMAL NOT NULL
+    volume DECIMAL NOT NULL,
+    resolution VARCHAR(10) NOT NULL DEFAULT '15'
 ) PARTITION BY RANGE (time);
 
 -- Create initial partitions for current month (November 2025) and next month (December 2025)
@@ -97,7 +98,7 @@ CREATE TABLE market_price_history_y2025m12 PARTITION OF market_price_history
     FOR VALUES FROM ('2025-12-01') TO ('2026-01-01');
 
 -- Index on partitioned table (applies to all partitions)
-CREATE INDEX idx_market_price_history_market_time ON market_price_history(market_id, time DESC);
+CREATE INDEX idx_market_price_history_market_time_resolution ON market_price_history(market_id, time DESC, resolution);
 
 -- Table: market_sentiment_history (Native PostgreSQL Partitioned Table)
 -- Stores aggregated sentiment analysis data over time for each market.
@@ -246,7 +247,8 @@ CREATE OR REPLACE FUNCTION insert_market_price_history(
     p_high DECIMAL,
     p_low DECIMAL,
     p_close DECIMAL,
-    p_volume DECIMAL
+    p_volume DECIMAL,
+    p_resolution VARCHAR(10) DEFAULT '15'
 )
 RETURNS VOID AS $$
 BEGIN
@@ -254,8 +256,8 @@ BEGIN
     PERFORM ensure_market_price_history_partition(p_time);
     
     -- Insert the data
-    INSERT INTO market_price_history (time, market_id, open, high, low, close, volume)
-    VALUES (p_time, p_market_id, p_open, p_high, p_low, p_close, p_volume);
+    INSERT INTO market_price_history (time, market_id, open, high, low, close, volume, resolution)
+    VALUES (p_time, p_market_id, p_open, p_high, p_low, p_close, p_volume, p_resolution);
 END;
 $$ LANGUAGE plpgsql;
 

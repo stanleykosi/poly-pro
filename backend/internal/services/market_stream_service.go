@@ -25,20 +25,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/poly-pro/backend/internal/config"
+	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/polymarket"
 	"github.com/redis/go-redis/v9"
 )
 
 // MarketStreamService is responsible for streaming market data and publishing it.
 type MarketStreamService struct {
-	redisClient *redis.Client
-	logger      *slog.Logger
-	ctx         context.Context
-	wsClient    *polymarket.CLOBWebSocketClient
-	config      config.Config
+	redisClient     *redis.Client
+	logger          *slog.Logger
+	ctx             context.Context
+	wsClient        *polymarket.CLOBWebSocketClient
+	config          config.Config
+	ohlcvAggregator *OHLCVAggregator
+	gammaClient     *polymarket.GammaAPIClient
 }
 
 // OrderBookLevel represents a single price level in the order book.
@@ -60,19 +64,24 @@ type MockOrderBookData struct {
 }
 
 // NewMarketStreamService creates a new MarketStreamService.
-func NewMarketStreamService(ctx context.Context, logger *slog.Logger, redisClient *redis.Client, cfg config.Config) *MarketStreamService {
+func NewMarketStreamService(ctx context.Context, logger *slog.Logger, redisClient *redis.Client, cfg config.Config, store db.Querier, gammaClient *polymarket.GammaAPIClient) *MarketStreamService {
 	// Initialize WebSocket client if credentials are provided
 	var wsClient *polymarket.CLOBWebSocketClient
 	if cfg.CLOBAPIKey != "" && cfg.CLOBAPISecret != "" && cfg.CLOBAPIPassphrase != "" {
 		wsClient = polymarket.NewCLOBWebSocketClient(cfg.CLOBWSURL, cfg.CLOBAPIKey, cfg.CLOBAPISecret, cfg.CLOBAPIPassphrase, logger)
 	}
 
+	// Initialize OHLCV aggregator
+	ohlcvAggregator := NewOHLCVAggregator(ctx, logger, store)
+
 	return &MarketStreamService{
-		redisClient: redisClient,
-		logger:      logger,
-		ctx:         ctx,
-		wsClient:    wsClient,
-		config:      cfg,
+		redisClient:     redisClient,
+		logger:          logger,
+		ctx:             ctx,
+		wsClient:        wsClient,
+		config:          cfg,
+		ohlcvAggregator: ohlcvAggregator,
+		gammaClient:     gammaClient,
 	}
 }
 
@@ -105,13 +114,48 @@ func (s *MarketStreamService) RunStream() {
 	}
 	defer s.wsClient.Close()
 
-	// Subscribe to order book updates for known markets
-	// In a production system, you might want to make this configurable or dynamic
-	assetIDs := []string{
-		"114304586861386186441621124384163963092522056897081085884483958561365015034812", // Xi Jinping market YES token
-		"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
+	// Fetch active markets from Gamma API and extract token IDs
+	var assetIDs []string
+	if s.gammaClient != nil {
+		s.logger.Info("fetching active markets from Gamma API to subscribe to WebSocket...")
+		
+		// Fetch active markets (limit to first 100 for initial implementation)
+		// You can increase this or use GetAllActiveMarkets() for all markets
+		markets, err := s.gammaClient.ListActiveMarkets(s.ctx, 100, 0)
+		if err != nil {
+			s.logger.Error("failed to fetch markets from Gamma API, falling back to hardcoded markets", "error", err)
+			// Fallback to hardcoded markets if Gamma API fails
+			assetIDs = []string{
+				"114304586861386186441621124384163963092522056897081085884483958561365015034812", // Xi Jinping market YES token
+				"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
+			}
+		} else {
+			// Extract token IDs from markets
+			// Each market has tokens (YES/NO), we'll subscribe to the YES token (first token)
+			for _, market := range markets {
+				if len(market.Tokens) > 0 {
+					// Use the first token (typically YES token)
+					// TokenID is the asset ID we need for CLOB WebSocket subscription
+					assetIDs = append(assetIDs, market.Tokens[0].TokenID)
+				}
+			}
+			s.logger.Info("extracted token IDs from Gamma API markets", "market_count", len(markets), "token_count", len(assetIDs))
+		}
+	} else {
+		// Fallback to hardcoded markets if Gamma client is not available
+		s.logger.Warn("Gamma client not available, using hardcoded markets")
+		assetIDs = []string{
+			"114304586861386186441621124384163963092522056897081085884483958561365015034812", // Xi Jinping market YES token
+			"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
+		}
 	}
 
+	if len(assetIDs) == 0 {
+		s.logger.Error("no asset IDs to subscribe to")
+		return
+	}
+
+	s.logger.Info("subscribing to WebSocket channels", "asset_count", len(assetIDs))
 	if err := s.wsClient.Subscribe(assetIDs); err != nil {
 		s.logger.Error("failed to subscribe to market channel", "error", err)
 		return
@@ -119,13 +163,42 @@ func (s *MarketStreamService) RunStream() {
 
 	// Listen for incoming messages
 	handler := func(bookMsg *polymarket.BookMessage) error {
+		// Convert bids/asks to interface{} for ExtractMidPrice
+		bids := make([]interface{}, len(bookMsg.Bids))
+		for i, bid := range bookMsg.Bids {
+			bids[i] = map[string]interface{}{
+				"price": bid.Price,
+				"size":  bid.Size,
+			}
+		}
+		asks := make([]interface{}, len(bookMsg.Asks))
+		for i, ask := range bookMsg.Asks {
+			asks[i] = map[string]interface{}{
+				"price": ask.Price,
+				"size":  ask.Size,
+			}
+		}
+
+		// Extract mid-price and aggregate OHLCV
+		midPrice := ExtractMidPrice(bids, asks)
+		if midPrice > 0 {
+			// Parse timestamp (assuming it's in milliseconds)
+			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
+			if err == nil {
+				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
+				if err := s.ohlcvAggregator.UpdatePrice(bookMsg.Market, midPrice, timestamp); err != nil {
+					s.logger.Error("failed to update OHLCV", "error", err, "market", bookMsg.Market)
+				}
+			}
+		}
+
 		// Convert to our format
 		data := map[string]interface{}{
 			"event_type": bookMsg.EventType,
 			"asset_id":   bookMsg.AssetID,
 			"market":     bookMsg.Market,
-			"bids":       bookMsg.Bids,
-			"asks":       bookMsg.Asks,
+			"bids":       bids,
+			"asks":       asks,
 			"timestamp":  bookMsg.Timestamp,
 			"hash":       bookMsg.Hash,
 		}
@@ -194,6 +267,18 @@ func (s *MarketStreamService) RunMockStream() {
 		case <-ticker.C:
 			for _, market := range mockMarkets {
 				data := s.generateMockOrderBook(market.Market, market.AssetID)
+				
+				// Extract mid-price and aggregate OHLCV
+				bids := data["bids"].([]interface{})
+				asks := data["asks"].([]interface{})
+				midPrice := ExtractMidPrice(bids, asks)
+				if midPrice > 0 {
+					timestamp := time.Now()
+					if err := s.ohlcvAggregator.UpdatePrice(market.Market, midPrice, timestamp); err != nil {
+						s.logger.Error("failed to update OHLCV", "error", err, "market", market.Market)
+					}
+				}
+
 				payload, err := json.Marshal(data)
 				if err != nil {
 					s.logger.Error("failed to marshal mock order book data", "error", err, "market", market.Market)

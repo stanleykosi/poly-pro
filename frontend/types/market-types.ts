@@ -76,3 +76,22 @@ export interface WebSocketBookMessage {
   hash: string
 }
 
+/**
+ * @interface NewsEvent
+ * @description Represents a news event related to a market that can be displayed on the chart.
+ * @property {string} id - Unique identifier for the news event.
+ * @property {string} marketId - The market ID this event is related to.
+ * @property {string} url - URL to the news article.
+ * @property {string} title - Title/headline of the news article.
+ * @property {string} source - Source of the news (e.g., "Reuters", "Bloomberg").
+ * @property {string} publishedAt - ISO timestamp string of when the news was published.
+ */
+export interface NewsEvent {
+  id: string
+  marketId: string
+  url: string
+  title: string
+  source: string
+  publishedAt: string // ISO timestamp string
+}
+

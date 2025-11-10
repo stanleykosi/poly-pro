@@ -18,6 +18,7 @@
  * - @/types: For the `Market` type.
  * - @/hooks/use-market-subscription: To subscribe to real-time data.
  * - @/components/ui/card: For structuring the layout.
+ * - @/app/(platform)/markets/[slug]/_components/lightweight-chart: The charting component.
  */
 'use client'
 
@@ -30,6 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import LightweightChart from '@/app/(platform)/markets/[slug]/_components/lightweight-chart'
 
 interface TradingTerminalProps {
   initialMarketData: Market
@@ -58,10 +60,8 @@ export default function TradingTerminal({
               <CardTitle>Market Chart</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex h-[400px] items-center justify-center text-secondary">
-                {/* TradingView Chart will be integrated here in Step 16 */}
-                <p>TradingView Chart Placeholder</p>
-              </div>
+              {/* Integrate the Lightweight Chart component */}
+              <LightweightChart marketId={initialMarketData.id} />
             </CardContent>
           </Card>
         </div>

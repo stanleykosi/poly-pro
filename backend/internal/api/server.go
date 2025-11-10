@@ -74,7 +74,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 	// Initialize services
 	userService := services.NewUserService(store, logger)
 	polymarketService := services.NewPolymarketService(store, logger, signerClient, config)
-	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient, config)
+	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient, config, store, gammaClient)
 
 	// Initialize the WebSocket Hub
 	hub := websocket.NewHub(ctx, logger, redisClient)
@@ -114,6 +114,10 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		// WebSocket route - does not require JWT auth for connection,
 		// but could be implemented to require it.
 		v1.GET("/ws", server.serveWs)
+
+		// Endpoint to get historical OHLCV data for a market. Public data for charting.
+		// This route must be registered BEFORE /markets/:id to avoid route conflicts.
+		v1.GET("/markets/:id/history", server.getMarketHistory)
 
 		// Endpoint to get static details for a market. This is public data.
 		v1.GET("/markets/:id", server.getMarketDetails)
