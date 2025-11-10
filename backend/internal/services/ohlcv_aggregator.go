@@ -77,6 +77,15 @@ func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Queri
 func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp time.Time) error {
 	a.totalUpdates++
 	
+	// Log first few updates to confirm function is being called
+	if a.totalUpdates <= 5 {
+		a.logger.Info("🔄 OHLCV aggregator UpdatePrice called", 
+			"update_number", a.totalUpdates,
+			"market_id", marketID,
+			"price", price,
+			"timestamp", timestamp.Format(time.RFC3339))
+	}
+	
 	// Update all resolutions for this market
 	resolutions := []string{"1", "5", "15", "60", "D"}
 

@@ -148,6 +148,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 	// Start ping goroutine
 	go c.ping()
 
+	messageCount := 0
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -162,8 +163,25 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				return err
 			}
 
+			messageCount++
+
+			// Log first few raw messages to see actual format
+			if messageCount <= 5 {
+				msgStr := string(message)
+				if len(msgStr) > 500 {
+					msgStr = msgStr[:500] + "..."
+				}
+				c.logger.Info("📥 raw WebSocket message received", 
+					"message_number", messageCount,
+					"message_length", len(message),
+					"message_preview", msgStr)
+			}
+
 			// Handle PONG messages
 			if string(message) == "PONG" {
+				if messageCount <= 5 {
+					c.logger.Info("received PONG message")
+				}
 				continue
 			}
 
@@ -171,9 +189,21 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			var bookMsg BookMessage
 			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
 				// Successfully parsed as book message
+				if messageCount == 1 {
+					c.logger.Info("✅ successfully parsed first book message (direct format)", 
+						"market", bookMsg.Market, 
+						"asset_id", bookMsg.AssetID, 
+						"bids_count", len(bookMsg.Bids), 
+						"asks_count", len(bookMsg.Asks),
+						"timestamp", bookMsg.Timestamp)
+				}
 				c.logger.Debug("received book message", "market", bookMsg.Market, "asset_id", bookMsg.AssetID, "bids_count", len(bookMsg.Bids), "asks_count", len(bookMsg.Asks))
 				if err := handler(&bookMsg); err != nil {
 					c.logger.Error("error handling book message", "error", err)
+				} else {
+					if messageCount <= 5 {
+						c.logger.Info("✅ handler called successfully for book message", "message_number", messageCount)
+					}
 				}
 				continue
 			}
@@ -181,20 +211,48 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			// Try to parse as WebSocketMessage wrapper
 			var wsMsg WebSocketMessage
 			if err := json.Unmarshal(message, &wsMsg); err == nil {
+				if messageCount <= 5 {
+					c.logger.Info("parsed as WebSocketMessage wrapper", 
+						"type", wsMsg.Type, 
+						"event_type", wsMsg.EventType,
+						"has_data", len(wsMsg.Data) > 0)
+				}
 				// Check if it's a book message in the wrapper
 				if wsMsg.EventType == "book" {
 					if err := json.Unmarshal(wsMsg.Data, &bookMsg); err == nil {
+						if messageCount == 1 {
+							c.logger.Info("✅ successfully parsed first book message (wrapped format)", 
+								"market", bookMsg.Market, 
+								"asset_id", bookMsg.AssetID, 
+								"bids_count", len(bookMsg.Bids), 
+								"asks_count", len(bookMsg.Asks),
+								"timestamp", bookMsg.Timestamp)
+						}
 						if err := handler(&bookMsg); err != nil {
 							c.logger.Error("error handling book message", "error", err)
+						} else {
+							if messageCount <= 5 {
+								c.logger.Info("✅ handler called successfully for wrapped book message", "message_number", messageCount)
+							}
 						}
 						continue
+					} else {
+						if messageCount <= 5 {
+							c.logger.Warn("failed to parse book message from wrapper data", 
+								"error", err,
+								"data_preview", string(wsMsg.Data[:min(200, len(wsMsg.Data))]))
+						}
 					}
 				}
 				// Other message types (subscription confirmations, errors, etc.) - log for debugging
 				if wsMsg.Type == "subscribed" || wsMsg.Type == "subscription" {
 					c.logger.Info("subscription confirmed by WebSocket", "type", wsMsg.Type, "event_type", wsMsg.EventType)
 				} else {
-					c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+					if messageCount <= 5 {
+						c.logger.Info("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+					} else {
+						c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+					}
 				}
 				continue
 			}
@@ -205,9 +263,31 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if len(msgStr) > 200 {
 				msgStr = msgStr[:200] + "..."
 			}
-			c.logger.Debug("received unparseable WebSocket message, skipping", "message_preview", msgStr, "message_length", len(string(message)))
+			if messageCount <= 10 {
+				// Try parsing again to get error messages
+				var parseErrDirect, parseErrWrapper error
+				_ = json.Unmarshal(message, &bookMsg)
+				parseErrDirect = json.Unmarshal(message, &bookMsg)
+				parseErrWrapper = json.Unmarshal(message, &wsMsg)
+				c.logger.Warn("⚠️  received unparseable WebSocket message", 
+					"message_number", messageCount,
+					"message_preview", msgStr, 
+					"message_length", len(string(message)),
+					"parse_error_direct", parseErrDirect,
+					"parse_error_wrapper", parseErrWrapper)
+			} else {
+				c.logger.Debug("received unparseable WebSocket message, skipping", "message_preview", msgStr, "message_length", len(string(message)))
+			}
 		}
 	}
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ping sends periodic PING messages to keep the connection alive
