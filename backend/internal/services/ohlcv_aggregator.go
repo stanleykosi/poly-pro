@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -180,21 +181,38 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		return err
 	}
 
-	var openVal, highVal, lowVal, closeVal, volumeVal pgtype.Numeric
-	if err := openVal.Scan(bar.Open); err != nil {
-		return err
+	// Helper function to convert float64 to pgtype.Numeric
+	// pgtype.Numeric.Scan() doesn't accept float64 directly, so we convert to string first
+	convertToNumeric := func(val float64) (pgtype.Numeric, error) {
+		var num pgtype.Numeric
+		// Convert float64 to string with sufficient precision (10 decimal places)
+		// Use 'g' format to avoid trailing zeros and handle large/small numbers
+		valStr := strconv.FormatFloat(val, 'g', -1, 64)
+		if err := num.Scan(valStr); err != nil {
+			return num, fmt.Errorf("failed to scan %f as numeric: %w", val, err)
+		}
+		return num, nil
 	}
-	if err := highVal.Scan(bar.High); err != nil {
-		return err
+
+	openVal, err := convertToNumeric(bar.Open)
+	if err != nil {
+		return fmt.Errorf("failed to convert open: %w", err)
 	}
-	if err := lowVal.Scan(bar.Low); err != nil {
-		return err
+	highVal, err := convertToNumeric(bar.High)
+	if err != nil {
+		return fmt.Errorf("failed to convert high: %w", err)
 	}
-	if err := closeVal.Scan(bar.Close); err != nil {
-		return err
+	lowVal, err := convertToNumeric(bar.Low)
+	if err != nil {
+		return fmt.Errorf("failed to convert low: %w", err)
 	}
-	if err := volumeVal.Scan(bar.Volume); err != nil {
-		return err
+	closeVal, err := convertToNumeric(bar.Close)
+	if err != nil {
+		return fmt.Errorf("failed to convert close: %w", err)
+	}
+	volumeVal, err := convertToNumeric(bar.Volume)
+	if err != nil {
+		return fmt.Errorf("failed to convert volume: %w", err)
 	}
 
 	// Insert into database
