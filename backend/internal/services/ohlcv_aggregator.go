@@ -36,6 +36,11 @@ type OHLCVAggregator struct {
 	// In-memory state: market_id -> resolution -> current bar
 	bars map[string]map[string]*CurrentBar
 	mu   sync.RWMutex
+	
+	// Track statistics
+	totalUpdates   int64
+	totalBarsSaved int64
+	lastStatusLog  time.Time
 }
 
 // CurrentBar represents a bar that is currently being aggregated.
@@ -53,17 +58,25 @@ type CurrentBar struct {
 
 // NewOHLCVAggregator creates a new OHLCV aggregator.
 func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Querier) *OHLCVAggregator {
-	return &OHLCVAggregator{
-		store:  store,
-		logger: logger,
-		ctx:    ctx,
-		bars:   make(map[string]map[string]*CurrentBar),
+	agg := &OHLCVAggregator{
+		store:        store,
+		logger:       logger,
+		ctx:          ctx,
+		bars:         make(map[string]map[string]*CurrentBar),
+		lastStatusLog: time.Now(),
 	}
+	
+	// Start periodic status logging
+	go agg.periodicStatusLog()
+	
+	return agg
 }
 
 // UpdatePrice processes a price update for a market and updates the current bar.
 // It extracts the mid-price from the order book (average of best bid and ask).
 func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp time.Time) error {
+	a.totalUpdates++
+	
 	// Update all resolutions for this market
 	resolutions := []string{"1", "5", "15", "60", "D"}
 
@@ -122,11 +135,12 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
-		a.logger.Debug("created new OHLCV bar", 
+		a.logger.Info("🆕 created new OHLCV bar", 
 			"market_id", marketID, 
 			"resolution", resolution, 
 			"start_time", barStartTime.Format(time.RFC3339),
-			"initial_price", price)
+			"initial_price", price,
+			"next_save_time", a.getNextSaveTime(barStartTime, resolution).Format(time.RFC3339))
 	}
 
 	// Update the bar with the new price
@@ -213,6 +227,7 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		return err
 	}
 
+	a.totalBarsSaved++
 	a.logger.Info("✅ OHLCV bar saved to database", 
 		"market_id", bar.MarketID, 
 		"resolution", bar.Resolution, 
@@ -221,7 +236,8 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		"high", bar.High,
 		"low", bar.Low,
 		"close", bar.Close,
-		"updates_count", bar.Count)
+		"updates_count", bar.Count,
+		"total_bars_saved", a.totalBarsSaved)
 	return nil
 }
 
@@ -288,5 +304,80 @@ func ExtractMidPrice(bids []interface{}, asks []interface{}) float64 {
 // parseFloat is a helper to parse string to float64.
 func parseFloat(s string) (float64, error) {
 	return strconv.ParseFloat(s, 64)
+}
+
+// getNextSaveTime calculates when the next bar for this resolution will be saved.
+func (a *OHLCVAggregator) getNextSaveTime(barStartTime time.Time, resolution string) time.Time {
+	switch resolution {
+	case "1": // 1 minute
+		return barStartTime.Add(1 * time.Minute)
+	case "5": // 5 minutes
+		return barStartTime.Add(5 * time.Minute)
+	case "15": // 15 minutes
+		return barStartTime.Add(15 * time.Minute)
+	case "60": // 1 hour
+		return barStartTime.Add(1 * time.Hour)
+	case "D": // 1 day
+		return barStartTime.Add(24 * time.Hour)
+	default:
+		return barStartTime.Add(1 * time.Hour)
+	}
+}
+
+// periodicStatusLog logs the current state of all bars periodically.
+func (a *OHLCVAggregator) periodicStatusLog() {
+	ticker := time.NewTicker(30 * time.Second) // Log every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			a.logStatus()
+		}
+	}
+}
+
+// logStatus logs the current state of all bars in memory.
+func (a *OHLCVAggregator) logStatus() {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if len(a.bars) == 0 {
+		a.logger.Warn("⚠️  OHLCV aggregator status: no bars in memory - no price updates received yet",
+			"total_updates", a.totalUpdates,
+			"total_bars_saved", a.totalBarsSaved)
+		return
+	}
+
+	// Count bars by resolution
+	barCounts := make(map[string]int)
+	var barDetails []map[string]interface{}
+
+	for marketID, resolutions := range a.bars {
+		for resolution, bar := range resolutions {
+			barCounts[resolution]++
+			nextSaveTime := a.getNextSaveTime(bar.StartTime, resolution)
+			timeUntilSave := time.Until(nextSaveTime)
+			
+			barDetails = append(barDetails, map[string]interface{}{
+				"market_id":      marketID,
+				"resolution":     resolution,
+				"start_time":     bar.StartTime.Format(time.RFC3339),
+				"next_save_time": nextSaveTime.Format(time.RFC3339),
+				"time_until_save": timeUntilSave.String(),
+				"updates_count":  bar.Count,
+				"current_price":  bar.Close,
+			})
+		}
+	}
+
+	a.logger.Info("📊 OHLCV aggregator status",
+		"total_updates", a.totalUpdates,
+		"total_bars_saved", a.totalBarsSaved,
+		"active_markets", len(a.bars),
+		"active_bars", barCounts,
+		"bars", barDetails)
 }
 
