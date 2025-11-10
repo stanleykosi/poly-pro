@@ -77,6 +77,15 @@ type BookMessage struct {
 	Hash      string        `json:"hash"`
 }
 
+// PriceChangeMessage represents a price change event
+type PriceChangeMessage struct {
+	EventType string `json:"event_type"` // "price_change"
+	AssetID   string `json:"asset_id"`
+	Market    string `json:"market"`
+	Price     string `json:"price"` // New price
+	Timestamp string `json:"timestamp"`
+}
+
 // SubscriptionMessage represents a subscription request
 type SubscriptionMessage struct {
 	Type      string   `json:"type"`       // "MARKET" or "USER"
@@ -185,7 +194,40 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				continue
 			}
 
-			// Try to parse as book message directly first (most common case)
+			// Try to parse as array of book messages first (initial snapshot)
+			var bookMessages []BookMessage
+			if err := json.Unmarshal(message, &bookMessages); err == nil && len(bookMessages) > 0 {
+				// Successfully parsed as array of book messages
+				if messageCount == 1 {
+					c.logger.Info("✅ successfully parsed first message as array of book messages", 
+						"array_length", len(bookMessages),
+						"first_market", bookMessages[0].Market,
+						"first_asset_id", bookMessages[0].AssetID)
+				}
+				// Process each book message in the array
+				for i, bookMsg := range bookMessages {
+					if bookMsg.EventType == "book" {
+						if messageCount == 1 && i == 0 {
+							c.logger.Info("✅ processing first book message from array", 
+								"market", bookMsg.Market, 
+								"asset_id", bookMsg.AssetID, 
+								"bids_count", len(bookMsg.Bids), 
+								"asks_count", len(bookMsg.Asks),
+								"timestamp", bookMsg.Timestamp)
+						}
+						if err := handler(&bookMsg); err != nil {
+							c.logger.Error("error handling book message from array", "error", err, "index", i)
+						} else {
+							if messageCount == 1 && i < 3 {
+								c.logger.Info("✅ handler called successfully for book message from array", "message_number", messageCount, "index", i)
+							}
+						}
+					}
+				}
+				continue
+			}
+
+			// Try to parse as book message directly (single message)
 			var bookMsg BookMessage
 			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
 				// Successfully parsed as book message
@@ -203,6 +245,43 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				} else {
 					if messageCount <= 5 {
 						c.logger.Info("✅ handler called successfully for book message", "message_number", messageCount)
+					}
+				}
+				continue
+			}
+
+			// Try to parse as price_change event
+			var priceChangeMsg PriceChangeMessage
+			if err := json.Unmarshal(message, &priceChangeMsg); err == nil && priceChangeMsg.EventType == "price_change" {
+				// Successfully parsed as price change event
+				if messageCount <= 5 {
+					c.logger.Info("✅ parsed price_change event", 
+						"market", priceChangeMsg.Market,
+						"asset_id", priceChangeMsg.AssetID,
+						"price", priceChangeMsg.Price,
+						"timestamp", priceChangeMsg.Timestamp)
+				}
+				// Convert price_change to a book message with synthetic bids/asks
+				// Use the price as both best bid and best ask for OHLCV aggregation
+				price := priceChangeMsg.Price
+				syntheticBookMsg := BookMessage{
+					EventType: "book",
+					AssetID:   priceChangeMsg.AssetID,
+					Market:    priceChangeMsg.Market,
+					Bids: []OrderLevel{
+						{Price: price, Size: "0"},
+					},
+					Asks: []OrderLevel{
+						{Price: price, Size: "0"},
+					},
+					Timestamp: priceChangeMsg.Timestamp,
+					Hash:      "",
+				}
+				if err := handler(&syntheticBookMsg); err != nil {
+					c.logger.Error("error handling price_change converted to book message", "error", err)
+				} else {
+					if messageCount <= 5 {
+						c.logger.Info("✅ handler called successfully for price_change event", "message_number", messageCount)
 					}
 				}
 				continue
@@ -239,6 +318,48 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 					} else {
 						if messageCount <= 5 {
 							c.logger.Warn("failed to parse book message from wrapper data", 
+								"error", err,
+								"data_preview", string(wsMsg.Data[:min(200, len(wsMsg.Data))]))
+						}
+					}
+				}
+				// Check if it's a price_change event in the wrapper
+				if wsMsg.EventType == "price_change" {
+					var priceChangeMsg PriceChangeMessage
+					if err := json.Unmarshal(wsMsg.Data, &priceChangeMsg); err == nil {
+						if messageCount <= 5 {
+							c.logger.Info("✅ parsed price_change event (wrapped format)", 
+								"market", priceChangeMsg.Market,
+								"asset_id", priceChangeMsg.AssetID,
+								"price", priceChangeMsg.Price,
+								"timestamp", priceChangeMsg.Timestamp)
+						}
+						// Convert price_change to a book message with synthetic bids/asks
+						price := priceChangeMsg.Price
+						syntheticBookMsg := BookMessage{
+							EventType: "book",
+							AssetID:   priceChangeMsg.AssetID,
+							Market:    priceChangeMsg.Market,
+							Bids: []OrderLevel{
+								{Price: price, Size: "0"},
+							},
+							Asks: []OrderLevel{
+								{Price: price, Size: "0"},
+							},
+							Timestamp: priceChangeMsg.Timestamp,
+							Hash:      "",
+						}
+						if err := handler(&syntheticBookMsg); err != nil {
+							c.logger.Error("error handling price_change converted to book message", "error", err)
+						} else {
+							if messageCount <= 5 {
+								c.logger.Info("✅ handler called successfully for wrapped price_change event", "message_number", messageCount)
+							}
+						}
+						continue
+					} else {
+						if messageCount <= 5 {
+							c.logger.Warn("failed to parse price_change from wrapper data", 
 								"error", err,
 								"data_preview", string(wsMsg.Data[:min(200, len(wsMsg.Data))]))
 						}
