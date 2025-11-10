@@ -95,6 +95,15 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	if !exists || bar.StartTime.Before(barStartTime) {
 		// If the bar doesn't exist or we've moved to a new time period, save the old bar and create a new one
 		if exists {
+			a.logger.Info("bar period complete, saving to database", 
+				"market_id", bar.MarketID, 
+				"resolution", bar.Resolution, 
+				"start_time", bar.StartTime.Format(time.RFC3339),
+				"open", bar.Open,
+				"high", bar.High,
+				"low", bar.Low,
+				"close", bar.Close,
+				"updates_count", bar.Count)
 			if err := a.saveBar(bar); err != nil {
 				return err
 			}
@@ -113,6 +122,11 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
+		a.logger.Debug("created new OHLCV bar", 
+			"market_id", marketID, 
+			"resolution", resolution, 
+			"start_time", barStartTime.Format(time.RFC3339),
+			"initial_price", price)
 	}
 
 	// Update the bar with the new price
@@ -124,6 +138,17 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 		bar.Low = price
 	}
 	bar.Count++
+
+	// Log first few updates per bar to show aggregation is working
+	if bar.Count <= 3 {
+		a.logger.Debug("updating OHLCV bar", 
+			"market_id", marketID, 
+			"resolution", resolution, 
+			"update_count", bar.Count,
+			"current_price", price,
+			"bar_high", bar.High,
+			"bar_low", bar.Low)
+	}
 
 	return nil
 }
@@ -188,7 +213,15 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		return err
 	}
 
-	a.logger.Debug("saved OHLCV bar", "market_id", bar.MarketID, "resolution", bar.Resolution, "time", bar.StartTime)
+	a.logger.Info("✅ OHLCV bar saved to database", 
+		"market_id", bar.MarketID, 
+		"resolution", bar.Resolution, 
+		"time", bar.StartTime.Format(time.RFC3339),
+		"open", bar.Open,
+		"high", bar.High,
+		"low", bar.Low,
+		"close", bar.Close,
+		"updates_count", bar.Count)
 	return nil
 }
 

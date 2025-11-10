@@ -130,11 +130,12 @@ func (c *CLOBWebSocketClient) Subscribe(assetIDs []string) error {
 		return fmt.Errorf("failed to marshal subscription message: %w", err)
 	}
 
-	c.logger.Info("subscribing to market channel", "asset_ids", assetIDs)
+	c.logger.Info("subscribing to market channel", "asset_ids", assetIDs, "asset_count", len(assetIDs))
 	if err := c.conn.WriteMessage(gorillaWS.TextMessage, message); err != nil {
 		return fmt.Errorf("failed to send subscription message: %w", err)
 	}
 
+	c.logger.Info("subscription message sent successfully", "asset_count", len(assetIDs))
 	return nil
 }
 
@@ -170,6 +171,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			var bookMsg BookMessage
 			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
 				// Successfully parsed as book message
+				c.logger.Debug("received book message", "market", bookMsg.Market, "asset_id", bookMsg.AssetID, "bids_count", len(bookMsg.Bids), "asks_count", len(bookMsg.Asks))
 				if err := handler(&bookMsg); err != nil {
 					c.logger.Error("error handling book message", "error", err)
 				}
@@ -188,8 +190,12 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 						continue
 					}
 				}
-				// Other message types (subscription confirmations, errors, etc.) - just log and continue
-				c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+				// Other message types (subscription confirmations, errors, etc.) - log for debugging
+				if wsMsg.Type == "subscribed" || wsMsg.Type == "subscription" {
+					c.logger.Info("subscription confirmed by WebSocket", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+				} else {
+					c.logger.Debug("received non-book WebSocket message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
+				}
 				continue
 			}
 

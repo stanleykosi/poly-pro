@@ -124,83 +124,79 @@ func (s *MarketStreamService) RunStream() {
 		// You can increase this or use GetAllActiveMarkets() for all markets
 		markets, err := s.gammaClient.ListActiveMarkets(s.ctx, 100, 0)
 		if err != nil {
-			s.logger.Error("failed to fetch markets from Gamma API, falling back to hardcoded markets", "error", err)
-			// Fallback to hardcoded markets if Gamma API fails
-			assetIDs = []string{
-				"114304586861386186441621124384163963092522056897081085884483958561365015034812", // Xi Jinping market YES token
-				"52114319501245915516055106046884209969926127482827954674443846427813813222426", // Fed rates market YES token
-			}
-		} else {
-			// Log first market structure for debugging
-			if len(markets) > 0 {
-				firstMarket := markets[0]
-				// Marshal to JSON to see actual structure
-				marketJSON, _ := json.Marshal(firstMarket)
-				s.logger.Info("sample market structure from Gamma API", 
-					"market_id", firstMarket.ConditionID,
-					"has_clobTokenIds", firstMarket.ClobTokenIds != "",
-					"clobTokenIds", firstMarket.ClobTokenIds,
-					"tokens_count", len(firstMarket.Tokens),
-					"market_json", string(marketJSON))
+			s.logger.Error("failed to fetch markets from Gamma API", "error", err)
+			return // No fallback, as per user request
+		}
+		
+		// Log first market structure for debugging
+		if len(markets) > 0 {
+			firstMarket := markets[0]
+			// Marshal to JSON to see actual structure
+			marketJSON, _ := json.Marshal(firstMarket)
+			s.logger.Info("sample market structure from Gamma API", 
+				"market_id", firstMarket.ConditionID,
+				"has_clobTokenIds", firstMarket.ClobTokenIds != "",
+				"clobTokenIds", firstMarket.ClobTokenIds,
+				"tokens_count", len(firstMarket.Tokens),
+				"market_json", string(marketJSON))
+		}
+		
+		// Extract token IDs from markets
+		// Try multiple methods to get token IDs:
+		// 1. Use clobTokenIds field (preferred - comma-separated or JSON array)
+		// 2. Fall back to Tokens array if clobTokenIds is empty
+		for i, market := range markets {
+			var tokenIDs []string
+			
+			// Method 1: Try clobTokenIds field (most reliable)
+			if market.ClobTokenIds != "" {
+				s.logger.Info("found clobTokenIds", "market_id", market.ConditionID, "clobTokenIds", market.ClobTokenIds)
+				// Try parsing as JSON array first
+				var jsonArray []string
+				if err := json.Unmarshal([]byte(market.ClobTokenIds), &jsonArray); err == nil {
+					// Successfully parsed as JSON array
+					tokenIDs = jsonArray
+					s.logger.Info("parsed clobTokenIds as JSON array", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
+				} else {
+					// Try parsing as comma-separated string
+					parts := strings.Split(market.ClobTokenIds, ",")
+					for _, part := range parts {
+						trimmed := strings.TrimSpace(part)
+						if trimmed != "" {
+							tokenIDs = append(tokenIDs, trimmed)
+						}
+					}
+					s.logger.Info("parsed clobTokenIds as comma-separated", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
+				}
 			}
 			
-			// Extract token IDs from markets
-			// Try multiple methods to get token IDs:
-			// 1. Use clobTokenIds field (preferred - comma-separated or JSON array)
-			// 2. Fall back to Tokens array if clobTokenIds is empty
-			for i, market := range markets {
-				var tokenIDs []string
-				
-				// Method 1: Try clobTokenIds field (most reliable)
-				if market.ClobTokenIds != "" {
-					s.logger.Info("found clobTokenIds", "market_id", market.ConditionID, "clobTokenIds", market.ClobTokenIds)
-					// Try parsing as JSON array first
-					var jsonArray []string
-					if err := json.Unmarshal([]byte(market.ClobTokenIds), &jsonArray); err == nil {
-						// Successfully parsed as JSON array
-						tokenIDs = jsonArray
-						s.logger.Info("parsed clobTokenIds as JSON array", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
-					} else {
-						// Try parsing as comma-separated string
-						parts := strings.Split(market.ClobTokenIds, ",")
-						for _, part := range parts {
-							trimmed := strings.TrimSpace(part)
-							if trimmed != "" {
-								tokenIDs = append(tokenIDs, trimmed)
-							}
-						}
-						s.logger.Info("parsed clobTokenIds as comma-separated", "market_id", market.ConditionID, "token_count", len(tokenIDs), "tokens", tokenIDs)
+			// Method 2: Fall back to Tokens array if clobTokenIds didn't work
+			if len(tokenIDs) == 0 && len(market.Tokens) > 0 {
+				s.logger.Info("using Tokens array", "market_id", market.ConditionID, "token_count", len(market.Tokens))
+				for j, token := range market.Tokens {
+					s.logger.Info("token details", "market_id", market.ConditionID, "token_index", j, "token_id", token.TokenID, "outcome", token.Outcome)
+					if token.TokenID != "" {
+						tokenIDs = append(tokenIDs, token.TokenID)
 					}
 				}
-				
-				// Method 2: Fall back to Tokens array if clobTokenIds didn't work
-				if len(tokenIDs) == 0 && len(market.Tokens) > 0 {
-					s.logger.Info("using Tokens array", "market_id", market.ConditionID, "token_count", len(market.Tokens))
-					for j, token := range market.Tokens {
-						s.logger.Info("token details", "market_id", market.ConditionID, "token_index", j, "token_id", token.TokenID, "outcome", token.Outcome)
-						if token.TokenID != "" {
-							tokenIDs = append(tokenIDs, token.TokenID)
-						}
-					}
-				}
-				
-				// Log if no token IDs found for this market
-				if len(tokenIDs) == 0 {
-					s.logger.Warn("no token IDs found for market", 
-						"market_id", market.ConditionID,
-						"market_index", i,
-						"has_clobTokenIds", market.ClobTokenIds != "",
-						"clobTokenIds", market.ClobTokenIds,
-						"tokens_count", len(market.Tokens))
-				} else {
-					s.logger.Info("extracted token IDs for market", "market_id", market.ConditionID, "token_count", len(tokenIDs), "token_ids", tokenIDs)
-				}
-				
-				// Add all token IDs found for this market
-				assetIDs = append(assetIDs, tokenIDs...)
 			}
-			s.logger.Info("extracted token IDs from Gamma API markets", "market_count", len(markets), "token_count", len(assetIDs))
+			
+			// Log if no token IDs found for this market
+			if len(tokenIDs) == 0 {
+				s.logger.Warn("no token IDs found for market", 
+					"market_id", market.ConditionID,
+					"market_index", i,
+					"has_clobTokenIds", market.ClobTokenIds != "",
+					"clobTokenIds", market.ClobTokenIds,
+					"tokens_count", len(market.Tokens))
+			} else {
+				s.logger.Info("extracted token IDs for market", "market_id", market.ConditionID, "token_count", len(tokenIDs), "token_ids", tokenIDs)
+			}
+			
+			// Add all token IDs found for this market
+			assetIDs = append(assetIDs, tokenIDs...)
 		}
+		s.logger.Info("extracted token IDs from Gamma API markets", "market_count", len(markets), "token_count", len(assetIDs))
 	} else {
 		s.logger.Error("Gamma client not available - cannot fetch markets")
 		return
@@ -216,9 +212,25 @@ func (s *MarketStreamService) RunStream() {
 		s.logger.Error("failed to subscribe to market channel", "error", err)
 		return
 	}
+	s.logger.Info("WebSocket subscription request completed", "asset_count", len(assetIDs), "waiting_for_confirmation", true)
 
 	// Listen for incoming messages
+	messageCount := 0
 	handler := func(bookMsg *polymarket.BookMessage) error {
+		messageCount++
+		if messageCount == 1 {
+			s.logger.Info("✅ first WebSocket message received - subscription confirmed and data flowing", 
+				"market", bookMsg.Market, 
+				"asset_id", bookMsg.AssetID,
+				"bids_count", len(bookMsg.Bids),
+				"asks_count", len(bookMsg.Asks))
+		}
+		
+		// Log every 100th message to show continuous data flow
+		if messageCount%100 == 0 {
+			s.logger.Info("WebSocket messages flowing", "total_messages", messageCount, "market", bookMsg.Market)
+		}
+
 		// Convert bids/asks to interface{} for ExtractMidPrice
 		bids := make([]interface{}, len(bookMsg.Bids))
 		for i, bid := range bookMsg.Bids {
@@ -244,8 +256,20 @@ func (s *MarketStreamService) RunStream() {
 				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
 				if err := s.ohlcvAggregator.UpdatePrice(bookMsg.Market, midPrice, timestamp); err != nil {
 					s.logger.Error("failed to update OHLCV", "error", err, "market", bookMsg.Market)
+				} else {
+					// Log first few price updates to confirm OHLCV aggregation is working
+					if messageCount <= 5 {
+						s.logger.Info("OHLCV price update processed", 
+							"market", bookMsg.Market, 
+							"mid_price", midPrice, 
+							"timestamp", timestamp.Format(time.RFC3339))
+					}
 				}
+			} else {
+				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
 			}
+		} else {
+			s.logger.Debug("mid-price is 0, skipping OHLCV update", "market", bookMsg.Market, "bids_count", len(bids), "asks_count", len(asks))
 		}
 
 		// Convert to our format
