@@ -130,17 +130,46 @@ export async function fetchHistoricalData(
   if (apiUrl) {
     apiUrl = apiUrl.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '')
   }
+  
+  if (!apiUrl) {
+    const error = new Error('NEXT_PUBLIC_API_URL is not set')
+    console.error('fetchHistoricalData error:', error)
+    throw error
+  }
+  
   const endpoint = `${apiUrl}/api/v1/markets/${marketId}/history?from=${from}&to=${to}&resolution=${resolution}`
 
   try {
-    const response = await fetch(endpoint)
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    
     if (!response.ok) {
-      throw new Error(`Failed to fetch history: ${response.statusText}`)
+      const errorText = await response.text()
+      const error = new Error(
+        `Failed to fetch history: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`
+      )
+      console.error('fetchHistoricalData error:', error, {
+        endpoint,
+        status: response.status,
+        statusText: response.statusText,
+      })
+      throw error
     }
 
     const data = await response.json()
 
+    // Handle "no_data" response
+    if (data.s === 'no_data') {
+      console.debug('No historical data available for market', { marketId, resolution })
+      return []
+    }
+
     if (data.s !== 'ok' || !data.t || data.t.length === 0) {
+      console.debug('Empty or invalid historical data response', { marketId, resolution, data })
       return []
     }
 
@@ -155,9 +184,16 @@ export async function fetchHistoricalData(
       volume: data.v[index],
     }))
 
+    console.debug('Fetched historical data', { marketId, resolution, barCount: bars.length })
     return bars
   } catch (error) {
-    console.error('fetchHistoricalData error:', error)
+    console.error('fetchHistoricalData error:', error, {
+      endpoint,
+      marketId,
+      from,
+      to,
+      resolution,
+    })
     throw error
   }
 }

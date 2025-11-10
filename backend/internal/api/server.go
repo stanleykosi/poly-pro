@@ -109,19 +109,25 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		
 		// Check if origin is in allowed list
 		allowed := false
-		for _, allowedOrigin := range allowedOrigins {
-			if origin == allowedOrigin {
-				allowed = true
-				break
+		if origin != "" {
+			for _, allowedOrigin := range allowedOrigins {
+				if origin == allowedOrigin {
+					allowed = true
+					break
+				}
 			}
 		}
 		
+		// Set CORS headers
 		if allowed && origin != "" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		} else if origin == "" {
 			// No origin header (e.g., same-origin request or Postman)
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		} else {
+			// Origin not in allowed list - still set headers but don't set Access-Control-Allow-Origin
+			// This allows the browser to show the error clearly
 		}
 		
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")

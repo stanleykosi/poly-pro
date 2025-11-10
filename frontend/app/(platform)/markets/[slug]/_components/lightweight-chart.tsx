@@ -266,24 +266,18 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
 
     // Cleanup function for useEffect
     return () => {
+      // Unsubscribe from real-time updates first
+      if (subscriptionIdRef.current) {
+        unsubscribeFromRealtimeUpdates(marketId)
+        subscriptionIdRef.current = null
+      }
+      // The cleanup function from initializeChart() already handles chart removal
+      // Only call it if it exists, and don't try to remove the chart again
       if (cleanup) {
         cleanup()
       }
-      if (subscriptionIdRef.current) {
-        unsubscribeFromRealtimeUpdates(marketId)
-      }
-      if (chartRef.current) {
-        try {
-          // Check if chart is still valid before removing
-          // In React Strict Mode, effects run twice, so we need to guard against double removal
-          chartRef.current.remove()
-        } catch (error) {
-          // Chart may already be disposed (e.g., in React Strict Mode)
-          console.debug('Chart already disposed or removed:', error)
-        } finally {
-          chartRef.current = null
-        }
-      }
+      // Clear the chart reference
+      chartRef.current = null
     }
   }, [marketId, newsEvents]) // Re-initialize if marketId or newsEvents changes
 
