@@ -47,6 +47,12 @@ useMarketStore.subscribe((state, prevState) => {
     const newMarketData = state.markets[sub.marketId]
 
     if (newMarketData && newMarketData !== prevMarketData) {
+      console.log('[Chart Datafeed] Store update received for market:', sub.marketId, {
+        has_bids: newMarketData.orderBook.bids?.length > 0,
+        has_asks: newMarketData.orderBook.asks?.length > 0,
+        has_lastBar: !!sub.lastBar,
+      })
+
       // Update the last bar with new price from order book
       if (sub.lastBar) {
         // Get the latest price from the order book (best bid or ask)
@@ -67,6 +73,10 @@ useMarketStore.subscribe((state, prevState) => {
 
         // Skip if we couldn't get a valid price
         if (newClose === 0 || isNaN(newClose)) {
+          console.warn('[Chart Datafeed] Invalid price extracted:', newClose, {
+            bids: newMarketData.orderBook.bids,
+            asks: newMarketData.orderBook.asks,
+          })
           return
         }
 
@@ -86,6 +96,7 @@ useMarketStore.subscribe((state, prevState) => {
             close: newClose,
             volume: 0,
           }
+          console.log('[Chart Datafeed] Creating initial bar:', updatedBar)
           // Add the bar to the series (first bar)
           if ('setData' in sub.series) {
             sub.series.setData([updatedBar])
@@ -99,6 +110,7 @@ useMarketStore.subscribe((state, prevState) => {
             high: Math.max(sub.lastBar.high, newClose),
             low: Math.min(sub.lastBar.low, newClose),
           }
+          console.log('[Chart Datafeed] Updating bar:', updatedBar)
           // Update the chart series
           if ('update' in sub.series) {
             sub.series.update(updatedBar)
@@ -106,6 +118,8 @@ useMarketStore.subscribe((state, prevState) => {
         }
 
         sub.lastBar = updatedBar
+      } else {
+        console.warn('[Chart Datafeed] No lastBar available for market:', sub.marketId)
       }
     }
   })
@@ -211,11 +225,34 @@ export function subscribeToRealtimeUpdates(
   series: ISeriesApi<'Candlestick' | 'Line' | 'Area' | 'Histogram'>,
   lastBar: BarData | null
 ): string {
+  // Check if there's already an active subscription for this market and series
+  // This prevents duplicate subscriptions in React Strict Mode
+  for (const [id, sub] of subscriptions.entries()) {
+    if (sub.marketId === marketId && sub.series === series) {
+      // Update the existing subscription with new lastBar
+      sub.lastBar = lastBar
+      console.log('[Chart Datafeed] Updated existing subscription:', {
+        subscriptionId: id,
+        marketId,
+        has_lastBar: !!lastBar,
+      })
+      return id
+    }
+  }
+  
+  // Create new subscription
   const subscriptionId = `${marketId}-${Date.now()}`
   subscriptions.set(subscriptionId, {
     marketId,
     series,
     lastBar,
+  })
+  console.log('[Chart Datafeed] Subscribed to real-time updates:', {
+    subscriptionId,
+    marketId,
+    has_lastBar: !!lastBar,
+    lastBar: lastBar,
+    total_subscriptions: subscriptions.size,
   })
   return subscriptionId
 }

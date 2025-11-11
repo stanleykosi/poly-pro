@@ -116,7 +116,10 @@ func (s *MarketStreamService) RunStream() {
 	defer s.wsClient.Close()
 
 	// Fetch active markets from Gamma API and extract token IDs
+	// Also create a mapping from asset/token ID to condition ID for publishing to correct Redis channels
 	var assetIDs []string
+	assetIDToConditionID := make(map[string]string) // Map asset ID -> condition ID
+	
 	if s.gammaClient != nil {
 		s.logger.Info("fetching active markets from Gamma API to subscribe to WebSocket...")
 		
@@ -141,7 +144,7 @@ func (s *MarketStreamService) RunStream() {
 				"market_json", string(marketJSON))
 		}
 		
-		// Extract token IDs from markets
+		// Extract token IDs from markets and create mapping
 		// Try multiple methods to get token IDs:
 		// 1. Use clobTokenIds field (preferred - comma-separated or JSON array)
 		// 2. Fall back to Tokens array if clobTokenIds is empty
@@ -183,7 +186,7 @@ func (s *MarketStreamService) RunStream() {
 			
 			// Log if no token IDs found for this market
 			if len(tokenIDs) == 0 {
-				s.logger.Warn("no token IDs found for market", 
+				s.logger.Warn("no token IDs found for market",
 					"market_id", market.ConditionID,
 					"market_index", i,
 					"has_clobTokenIds", market.ClobTokenIds != "",
@@ -193,10 +196,19 @@ func (s *MarketStreamService) RunStream() {
 				s.logger.Info("extracted token IDs for market", "market_id", market.ConditionID, "token_count", len(tokenIDs), "token_ids", tokenIDs)
 			}
 			
+			// Create mapping from token ID to condition ID
+			// This allows us to publish to Redis channels using condition ID when messages arrive
+			for _, tokenID := range tokenIDs {
+				assetIDToConditionID[tokenID] = market.ConditionID
+			}
+			
 			// Add all token IDs found for this market
 			assetIDs = append(assetIDs, tokenIDs...)
 		}
-		s.logger.Info("extracted token IDs from Gamma API markets", "market_count", len(markets), "token_count", len(assetIDs))
+		s.logger.Info("extracted token IDs from Gamma API markets", 
+			"market_count", len(markets), 
+			"token_count", len(assetIDs),
+			"mapping_size", len(assetIDToConditionID))
 	} else {
 		s.logger.Error("Gamma client not available - cannot fetch markets")
 		return
@@ -278,14 +290,46 @@ func (s *MarketStreamService) RunStream() {
 			return err
 		}
 
-		// Publish to Redis channel
-		channel := "market:" + bookMsg.Market
+		// Map asset ID to condition ID for Redis channel
+		// The frontend subscribes using condition IDs, so we need to publish to channels using condition IDs
+		conditionID := bookMsg.Market // Default to bookMsg.Market (might already be condition ID)
+		
+		// Try to map asset ID to condition ID
+		if mappedConditionID, ok := assetIDToConditionID[bookMsg.AssetID]; ok {
+			conditionID = mappedConditionID
+			s.logger.Debug("mapped asset ID to condition ID", "asset_id", bookMsg.AssetID, "condition_id", conditionID)
+		} else if mappedConditionID, ok := assetIDToConditionID[bookMsg.Market]; ok {
+			// bookMsg.Market might also be an asset ID
+			conditionID = mappedConditionID
+			s.logger.Debug("mapped market field to condition ID", "market", bookMsg.Market, "condition_id", conditionID)
+		} else {
+			// If no mapping found, log a warning but still publish (bookMsg.Market might already be condition ID)
+			s.logger.Debug("no mapping found for asset/market ID, using as-is", 
+				"asset_id", bookMsg.AssetID, 
+				"market", bookMsg.Market,
+				"using_as_condition_id", conditionID)
+		}
+		
+		// Update the market field in the data to use condition ID
+		data["market"] = conditionID
+		payload, err = json.Marshal(data)
+		if err != nil {
+			s.logger.Error("failed to marshal order book data after condition ID mapping", "error", err)
+			return err
+		}
+		
+		// Publish to Redis channel using condition ID
+		channel := "market:" + conditionID
 		if err := s.redisClient.Publish(s.ctx, channel, payload).Err(); err != nil {
 			s.logger.Error("failed to publish data to redis", "error", err, "channel", channel)
 			return err
 		}
 
-		s.logger.Debug("published order book update", "market", bookMsg.Market, "asset_id", bookMsg.AssetID)
+		s.logger.Debug("published order book update", 
+			"condition_id", conditionID, 
+			"asset_id", bookMsg.AssetID,
+			"original_market", bookMsg.Market,
+			"channel", channel)
 		return nil
 	}
 

@@ -128,14 +128,25 @@ class WebSocketService {
     try {
       const message = JSON.parse(event.data) as WebSocketBookMessage
 
+      console.log('[WebSocket] Received message:', {
+        event_type: message.event_type,
+        market: message.market,
+        asset_id: message.asset_id,
+        has_bids: message.bids?.length > 0,
+        has_asks: message.asks?.length > 0,
+        bids_count: message.bids?.length || 0,
+        asks_count: message.asks?.length || 0,
+      })
+
       if (message.event_type === 'book' && message.market) {
         // Update the Zustand store with the new order book data.
         useMarketStore.getState().setOrderBook(message.market, message)
+        console.log('[WebSocket] Updated store for market:', message.market)
       } else {
         console.warn('[WebSocket] Received unhandled message:', message)
       }
     } catch (error) {
-      console.error('[WebSocket] Failed to parse message:', error)
+      console.error('[WebSocket] Failed to parse message:', error, 'Raw data:', event.data)
     }
   }
 
