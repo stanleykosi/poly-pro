@@ -112,10 +112,11 @@ func (h *Hub) Run() {
 			if _, ok := h.subscriptions[sub.marketID]; !ok {
 				h.subscriptions[sub.marketID] = make(map[*Client]bool)
 				// First client for this market, so we subscribe to the Redis channel.
+				h.logger.Info("first subscription to market, starting Redis listener", "market_id", sub.marketID)
 				go h.listenToMarket(sub.marketID)
 			}
 			h.subscriptions[sub.marketID][sub.client] = true
-			h.logger.Info("client subscribed to market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr())
+			h.logger.Info("✅ client subscribed to market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr(), "total_clients_for_market", len(h.subscriptions[sub.marketID]))
 		case sub := <-h.Unsubscribe:
 			if market, ok := h.subscriptions[sub.marketID]; ok {
 				delete(market, sub.client)
@@ -138,6 +139,7 @@ func (h *Hub) listenToMarket(marketID string) {
 	h.logger.Info("subscribing to redis channel", "channel", channel)
 
 	ch := pubsub.Channel()
+	messageCount := 0
 
 	for {
 		select {
@@ -145,6 +147,13 @@ func (h *Hub) listenToMarket(marketID string) {
 			h.logger.Info("stopping redis listener for channel", "channel", channel)
 			return
 		case msg := <-ch:
+			messageCount++
+			if messageCount == 1 {
+				h.logger.Info("✅ hub: received first message from Redis", "channel", channel, "market_id", marketID)
+			}
+			if messageCount%100 == 0 {
+				h.logger.Info("hub: messages from Redis", "channel", channel, "count", messageCount)
+			}
 			h.broadcastToMarket(marketID, []byte(msg.Payload))
 		}
 	}
@@ -153,19 +162,25 @@ func (h *Hub) listenToMarket(marketID string) {
 // broadcastToMarket sends a message to all clients subscribed to a specific market.
 func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 	if market, ok := h.subscriptions[marketID]; ok {
-		h.logger.Debug("broadcasting to market", "market_id", marketID, "num_clients", len(market))
+		if len(market) > 0 {
+			h.logger.Info("hub: broadcasting to clients", "market_id", marketID, "num_clients", len(market))
+		}
 		for client := range market {
 			select {
 			case client.Send <- message:
+				// Message sent successfully
 			default:
 				// If the client's send buffer is full, assume it's slow or disconnected.
 				// Unregister the client to prevent blocking.
+				h.logger.Warn("client send buffer full, unregistering", "market_id", marketID, "client", client.Conn.RemoteAddr())
 				close(client.Send)
 				delete(h.clients, client)
 				// Also remove from the specific subscription
 				delete(market, client)
 			}
 		}
+	} else {
+		h.logger.Debug("hub: no clients subscribed to market", "market_id", marketID)
 	}
 }
 

@@ -128,6 +128,7 @@ func (c *Client) WritePump() {
 		c.Conn.Close()
 	}()
 
+	messageCount := 0
 	for {
 		select {
 		case message, ok := <-c.Send:
@@ -138,8 +139,17 @@ func (c *Client) WritePump() {
 				return
 			}
 
+			messageCount++
+			if messageCount == 1 {
+				c.Logger.Info("✅ client: sending first message to WebSocket", "remote_addr", c.Conn.RemoteAddr())
+			}
+			if messageCount%100 == 0 {
+				c.Logger.Info("client: messages sent", "remote_addr", c.Conn.RemoteAddr(), "count", messageCount)
+			}
+
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				c.Logger.Error("failed to get next writer", "error", err)
 				return
 			}
 			w.Write(message)
@@ -152,6 +162,7 @@ func (c *Client) WritePump() {
 			}
 
 			if err := w.Close(); err != nil {
+				c.Logger.Error("failed to close writer", "error", err)
 				return
 			}
 		case <-ticker.C:
