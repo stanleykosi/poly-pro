@@ -225,11 +225,12 @@ export function subscribeToRealtimeUpdates(
   series: ISeriesApi<'Candlestick' | 'Line' | 'Area' | 'Histogram'>,
   lastBar: BarData | null
 ): string {
-  // Check if there's already an active subscription for this market and series
-  // This prevents duplicate subscriptions in React Strict Mode
+  // Check if there's already an active subscription for this market
+  // In React Strict Mode, the series object might be a new instance, so we check by marketId only
   for (const [id, sub] of subscriptions.entries()) {
-    if (sub.marketId === marketId && sub.series === series) {
-      // Update the existing subscription with new lastBar
+    if (sub.marketId === marketId) {
+      // Update the existing subscription with new series and lastBar
+      sub.series = series
       sub.lastBar = lastBar
       console.log('[Chart Datafeed] Updated existing subscription:', {
         subscriptionId: id,
@@ -251,7 +252,6 @@ export function subscribeToRealtimeUpdates(
     subscriptionId,
     marketId,
     has_lastBar: !!lastBar,
-    lastBar: lastBar,
     total_subscriptions: subscriptions.size,
   })
   return subscriptionId
