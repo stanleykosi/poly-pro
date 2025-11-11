@@ -59,6 +59,10 @@ export interface Market {
   title: string
   description: string
   resolution_source: string
+  slug?: string
+  category?: string
+  liquidity?: string
+  end_date?: string
 }
 
 /**

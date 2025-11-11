@@ -59,6 +59,7 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markersRef = useRef<any[]>([])
   const subscriptionIdRef = useRef<string | null>(null)
+  const mountedRef = useRef<boolean>(true)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -68,27 +69,45 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
   useEffect(() => {
     if (!containerRef.current) return
 
+    // Mark component as mounted
+    mountedRef.current = true
+
     // Store the cleanup function
     let cleanup: (() => void) | undefined
 
     // Ensure container has dimensions before creating chart
     const container = containerRef.current
-    if (container.clientWidth === 0 || container.clientHeight === 0) {
-      // Wait for next frame to ensure container is rendered
-      requestAnimationFrame(() => {
-        if (container.clientWidth > 0 && container.clientHeight > 0 && containerRef.current) {
-          cleanup = initializeChart()
-        }
-      })
-    } else {
+    const initChart = () => {
+      if (!mountedRef.current || !containerRef.current) return
       cleanup = initializeChart()
     }
 
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      // Wait for next frame to ensure container is rendered
+      requestAnimationFrame(initChart)
+    } else {
+      initChart()
+    }
+
     function initializeChart() {
-      if (!containerRef.current) return
+      if (!containerRef.current || !mountedRef.current) return
+
+      // Clean up any existing chart first
+      if (chartRef.current) {
+        try {
+          chartRef.current.remove()
+        } catch (e) {
+          // Chart may already be disposed
+        }
+        chartRef.current = null
+      }
+      if (subscriptionIdRef.current) {
+        unsubscribeFromRealtimeUpdates(marketId)
+        subscriptionIdRef.current = null
+      }
 
       // Initialize the chart
-      const chart = createChart(containerRef.current, {
+      const chart = createChart(containerRef.current!, {
         layout: {
           background: { color: '#0D1117' },
           textColor: '#C9D1D9',
@@ -111,8 +130,10 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
       // Verify chart was created successfully
       if (!chart) {
         console.error('Chart initialization failed - chart is null')
-        setError('Failed to initialize chart')
-        setIsLoading(false)
+        if (mountedRef.current) {
+          setError('Failed to initialize chart')
+          setIsLoading(false)
+        }
         return
       }
 
@@ -156,8 +177,10 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
           seriesMethods: seriesMethods,
           allMethods: allMethods.slice(0, 20), // First 20 methods
         })
-        setError('Chart API not available')
-        setIsLoading(false)
+        if (mountedRef.current) {
+          setError('Chart API not available')
+          setIsLoading(false)
+        }
         return
       }
 
@@ -166,8 +189,16 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
       // Load historical data
       const loadHistoricalData = async () => {
         try {
-          setIsLoading(true)
-          setError(null)
+          // Use refs to check validity instead of local variables
+          if (!mountedRef.current || !chartRef.current || !seriesRef.current) {
+            // Component unmounted or chart disposed, skip loading
+            return
+          }
+
+          if (mountedRef.current) {
+            setIsLoading(true)
+            setError(null)
+          }
 
           // Calculate time range (last 30 days)
           const to = Math.floor(Date.now() / 1000) // Current time in seconds
@@ -180,17 +211,73 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
             resolution
           )
 
+          // Check again if component is still mounted and chart is valid
+          if (!mountedRef.current || !chartRef.current || !seriesRef.current) {
+            return
+          }
+
           let lastBar: BarData | null = null
 
-          if (bars.length > 0) {
-            // Set data to the series
-            candlestickSeries.setData(bars as CandlestickData[])
-            lastBar = bars[bars.length - 1]
-          } else {
-            // No historical data - create an empty initial bar that will be updated by real-time data
-            // This allows the chart to work even if the database is empty
+          try {
+            if (bars.length > 0) {
+              // Set data to the series
+              seriesRef.current.setData(bars as CandlestickData[])
+              lastBar = bars[bars.length - 1]
+            } else {
+              // No historical data - create an empty initial bar that will be updated by real-time data
+              // This allows the chart to work even if the database is empty
+              const currentTime = Math.floor(Date.now() / 1000) as Time
+              lastBar = {
+                time: currentTime,
+                open: 0,
+                high: 0,
+                low: 0,
+                close: 0,
+                volume: 0,
+              }
+              // Set empty data to initialize the series
+              seriesRef.current.setData([])
+            }
+          } catch (setDataError) {
+            // Chart may have been disposed (e.g., in React Strict Mode)
+            if (setDataError instanceof Error && setDataError.message.includes('disposed')) {
+              console.debug('Chart disposed before setData completed:', setDataError)
+              return
+            }
+            throw setDataError
+          }
+
+          // Check again before subscribing
+          if (!mountedRef.current || !chartRef.current || !seriesRef.current) {
+            return
+          }
+
+          // Subscribe to real-time updates (even if no historical data)
+          // The subscription will update the chart as data comes in
+          subscriptionIdRef.current = subscribeToRealtimeUpdates(
+            marketId,
+            seriesRef.current,
+            lastBar
+          )
+
+          // Add news event markers
+          addNewsMarkers(seriesRef.current, newsEvents)
+
+          if (mountedRef.current) {
+            setIsLoading(false)
+          }
+        } catch (err) {
+          console.error('Failed to load historical data:', err)
+          
+          // Check if component is still mounted before trying to set state or subscribe
+          if (!mountedRef.current || !chartRef.current || !seriesRef.current) {
+            return
+          }
+
+          // Even if historical data fails, try to subscribe to real-time updates
+          try {
             const currentTime = Math.floor(Date.now() / 1000) as Time
-            lastBar = {
+            const initialBar: BarData = {
               time: currentTime,
               open: 0,
               high: 0,
@@ -198,41 +285,25 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
               close: 0,
               volume: 0,
             }
-            // Set empty data to initialize the series
-            candlestickSeries.setData([])
+            subscriptionIdRef.current = subscribeToRealtimeUpdates(
+              marketId,
+              seriesRef.current,
+              initialBar
+            )
+            if (mountedRef.current) {
+              setError('Failed to load historical data, but real-time updates are active')
+              setIsLoading(false)
+            }
+          } catch (subscribeError) {
+            // Chart may have been disposed
+            if (subscribeError instanceof Error && subscribeError.message.includes('disposed')) {
+              console.debug('Chart disposed before subscription:', subscribeError)
+              return
+            }
+            if (mountedRef.current) {
+              setIsLoading(false)
+            }
           }
-
-          // Subscribe to real-time updates (even if no historical data)
-          // The subscription will update the chart as data comes in
-          subscriptionIdRef.current = subscribeToRealtimeUpdates(
-            marketId,
-            candlestickSeries,
-            lastBar
-          )
-
-          // Add news event markers
-          addNewsMarkers(candlestickSeries, newsEvents)
-
-          setIsLoading(false)
-        } catch (err) {
-          console.error('Failed to load historical data:', err)
-          // Even if historical data fails, try to subscribe to real-time updates
-          const currentTime = Math.floor(Date.now() / 1000) as Time
-          const initialBar: BarData = {
-            time: currentTime,
-            open: 0,
-            high: 0,
-            low: 0,
-            close: 0,
-            volume: 0,
-          }
-          subscriptionIdRef.current = subscribeToRealtimeUpdates(
-            marketId,
-            candlestickSeries,
-            initialBar
-          )
-          setError('Failed to load historical data, but real-time updates are active')
-          setIsLoading(false)
         }
       }
 
@@ -240,10 +311,14 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
 
       // Handle window resize
       const handleResize = () => {
-        if (containerRef.current && chart) {
-          chart.applyOptions({
-            width: containerRef.current.clientWidth,
-          })
+        if (containerRef.current && chartRef.current) {
+          try {
+            chartRef.current.applyOptions({
+              width: containerRef.current.clientWidth,
+            })
+          } catch (e) {
+            // Chart may be disposed
+          }
         }
       }
 
@@ -254,10 +329,17 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
         window.removeEventListener('resize', handleResize)
         if (subscriptionIdRef.current) {
           unsubscribeFromRealtimeUpdates(marketId)
+          subscriptionIdRef.current = null
         }
-        if (chart) {
-          chart.remove()
+        if (chartRef.current) {
+          try {
+            chartRef.current.remove()
+          } catch (e) {
+            // Chart may already be disposed
+          }
+          chartRef.current = null
         }
+        seriesRef.current = null
       }
 
       // Return cleanup function to be called when component unmounts or dependencies change
@@ -266,6 +348,9 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
 
     // Cleanup function for useEffect
     return () => {
+      // Mark component as unmounted to prevent state updates
+      mountedRef.current = false
+      
       // Unsubscribe from real-time updates first
       if (subscriptionIdRef.current) {
         unsubscribeFromRealtimeUpdates(marketId)
@@ -278,6 +363,7 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
       }
       // Clear the chart reference
       chartRef.current = null
+      seriesRef.current = null
     }
   }, [marketId, newsEvents]) // Re-initialize if marketId or newsEvents changes
 

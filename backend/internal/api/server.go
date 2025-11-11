@@ -160,6 +160,10 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		// but could be implemented to require it.
 		v1.GET("/ws", server.serveWs)
 
+		// Endpoint to list all active markets. Public data.
+		// This route must be registered BEFORE /markets/:id to avoid route conflicts.
+		v1.GET("/markets", server.listMarkets)
+
 		// Endpoint to get historical OHLCV data for a market. Public data for charting.
 		// This route must be registered BEFORE /markets/:id to avoid route conflicts.
 		v1.GET("/markets/:id/history", server.getMarketHistory)
