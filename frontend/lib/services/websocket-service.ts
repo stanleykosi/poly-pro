@@ -93,9 +93,12 @@ class WebSocketService {
    * @param {string} marketId - The ID of the market to subscribe to.
    */
   public subscribe(marketId: string): void {
+    console.log('[WebSocket] Subscribing to market:', marketId, 'Current subscriptions:', Array.from(this.subscriptions))
     this.subscriptions.add(marketId)
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.sendSubscriptionMessage([marketId], 'subscribe')
+    } else {
+      console.log('[WebSocket] WebSocket not open yet, subscription will be sent on connect. ReadyState:', this.ws?.readyState)
     }
   }
 
@@ -125,28 +128,46 @@ class WebSocketService {
   }
 
   private handleMessage = (event: MessageEvent) => {
+    // Log that we received a message, even before parsing
+    console.log('[WebSocket] Raw message received', {
+      data_type: typeof event.data,
+      data_length: event.data?.length || 0,
+      data_preview: typeof event.data === 'string' ? event.data.substring(0, 200) : 'not a string',
+    })
+
     try {
-      const message = JSON.parse(event.data) as WebSocketBookMessage
+      // Handle case where multiple messages might be in one frame (separated by newlines)
+      const dataStr = typeof event.data === 'string' ? event.data : String(event.data)
+      const lines = dataStr.split('\n').filter(line => line.trim().length > 0)
+      
+      // Process each line as a separate message
+      for (const line of lines) {
+        try {
+          const message = JSON.parse(line) as WebSocketBookMessage
 
-      console.log('[WebSocket] Received message:', {
-        event_type: message.event_type,
-        market: message.market,
-        asset_id: message.asset_id,
-        has_bids: message.bids?.length > 0,
-        has_asks: message.asks?.length > 0,
-        bids_count: message.bids?.length || 0,
-        asks_count: message.asks?.length || 0,
-      })
+          console.log('[WebSocket] Received message:', {
+            event_type: message.event_type,
+            market: message.market,
+            asset_id: message.asset_id,
+            has_bids: message.bids?.length > 0,
+            has_asks: message.asks?.length > 0,
+            bids_count: message.bids?.length || 0,
+            asks_count: message.asks?.length || 0,
+          })
 
-      if (message.event_type === 'book' && message.market) {
-        // Update the Zustand store with the new order book data.
-        useMarketStore.getState().setOrderBook(message.market, message)
-        console.log('[WebSocket] Updated store for market:', message.market)
-      } else {
-        console.warn('[WebSocket] Received unhandled message:', message)
+          if (message.event_type === 'book' && message.market) {
+            // Update the Zustand store with the new order book data.
+            useMarketStore.getState().setOrderBook(message.market, message)
+            console.log('[WebSocket] Updated store for market:', message.market)
+          } else {
+            console.warn('[WebSocket] Received unhandled message:', message)
+          }
+        } catch (lineError) {
+          console.error('[WebSocket] Failed to parse message line:', lineError, 'Line:', line.substring(0, 100))
+        }
       }
     } catch (error) {
-      console.error('[WebSocket] Failed to parse message:', error, 'Raw data:', event.data)
+      console.error('[WebSocket] Failed to process message:', error, 'Raw data:', event.data)
     }
   }
 

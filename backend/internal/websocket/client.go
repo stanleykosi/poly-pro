@@ -95,14 +95,17 @@ func (c *Client) handleMessage(message []byte) {
 		return
 	}
 
-	c.Logger.Info("received message from client", "type", msg.Type, "markets", msg.MarketIDs)
+	c.Logger.Info("received message from client", "type", msg.Type, "markets", msg.MarketIDs, "client_addr", c.Conn.RemoteAddr())
 
 	switch msg.Type {
 	case "subscribe":
 		for _, marketID := range msg.MarketIDs {
 			if !c.Subscriptions[marketID] {
 				c.Subscriptions[marketID] = true
+				c.Logger.Info("client subscribing to market", "market_id", marketID, "client_addr", c.Conn.RemoteAddr())
 				c.Hub.Subscribe <- subscription{client: c, marketID: marketID}
+			} else {
+				c.Logger.Debug("client already subscribed to market", "market_id", marketID)
 			}
 		}
 	case "unsubscribe":
@@ -141,7 +144,17 @@ func (c *Client) WritePump() {
 
 			messageCount++
 			if messageCount == 1 {
-				c.Logger.Info("✅ client: sending first message to WebSocket", "remote_addr", c.Conn.RemoteAddr())
+				// Log first message content to verify it's being sent
+				var msgData map[string]interface{}
+				if err := json.Unmarshal(message, &msgData); err == nil {
+					c.Logger.Info("✅ client: sending first message to WebSocket", 
+						"remote_addr", c.Conn.RemoteAddr(),
+						"event_type", msgData["event_type"],
+						"market", msgData["market"],
+						"message_size", len(message))
+				} else {
+					c.Logger.Info("✅ client: sending first message to WebSocket", "remote_addr", c.Conn.RemoteAddr(), "message_size", len(message))
+				}
 			}
 			if messageCount%100 == 0 {
 				c.Logger.Info("client: messages sent", "remote_addr", c.Conn.RemoteAddr(), "count", messageCount)

@@ -30,6 +30,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/redis/go-redis/v9"
@@ -149,10 +150,17 @@ func (h *Hub) listenToMarket(marketID string) {
 		case msg := <-ch:
 			messageCount++
 			if messageCount == 1 {
-				h.logger.Info("✅ hub: received first message from Redis", "channel", channel, "market_id", marketID)
+				h.logger.Info("✅ hub: received first message from Redis", "channel", channel, "market_id", marketID, "payload_size", len(msg.Payload))
 			}
 			if messageCount%100 == 0 {
 				h.logger.Info("hub: messages from Redis", "channel", channel, "count", messageCount)
+			}
+			// Log first few messages to verify they're being received
+			if messageCount <= 3 {
+				var msgData map[string]interface{}
+				if err := json.Unmarshal([]byte(msg.Payload), &msgData); err == nil {
+					h.logger.Info("hub: message content", "market_id", marketID, "event_type", msgData["event_type"], "has_bids", msgData["bids"] != nil, "has_asks", msgData["asks"] != nil)
+				}
 			}
 			h.broadcastToMarket(marketID, []byte(msg.Payload))
 		}
@@ -163,7 +171,10 @@ func (h *Hub) listenToMarket(marketID string) {
 func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 	if market, ok := h.subscriptions[marketID]; ok {
 		if len(market) > 0 {
-			h.logger.Info("hub: broadcasting to clients", "market_id", marketID, "num_clients", len(market))
+			// Log first few broadcasts to verify messages are being sent
+			if len(market) > 0 {
+				h.logger.Info("hub: broadcasting to clients", "market_id", marketID, "num_clients", len(market), "message_size", len(message))
+			}
 		}
 		for client := range market {
 			select {
@@ -180,7 +191,7 @@ func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 			}
 		}
 	} else {
-		h.logger.Debug("hub: no clients subscribed to market", "market_id", marketID)
+		h.logger.Warn("hub: no clients subscribed to market", "market_id", marketID, "available_markets", len(h.subscriptions))
 	}
 }
 
