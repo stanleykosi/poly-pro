@@ -109,14 +109,22 @@ func (c *Client) handleMessage(message []byte) {
 		return
 	}
 
-	c.Logger.Info("✅ client: parsed message", "type", msg.Type, "markets", msg.MarketIDs, "markets_count", len(msg.MarketIDs), "client_addr", c.Conn.RemoteAddr())
+	c.Logger.Info("✅ client: parsed message", 
+		"type", msg.Type, 
+		"markets", msg.MarketIDs, 
+		"markets_count", len(msg.MarketIDs), 
+		"client_addr", c.Conn.RemoteAddr())
 
 	switch msg.Type {
 	case "subscribe":
 		for _, marketID := range msg.MarketIDs {
 			if !c.Subscriptions[marketID] {
 				c.Subscriptions[marketID] = true
-				c.Logger.Info("📥 client: sending subscription to hub", "market_id", marketID, "client_addr", c.Conn.RemoteAddr())
+				c.Logger.Info("📥 client: sending subscription to hub", 
+					"market_id", marketID,
+					"market_id_length", len(marketID),
+					"market_id_bytes", []byte(marketID),
+					"client_addr", c.Conn.RemoteAddr())
 				c.Hub.Subscribe <- subscription{client: c, marketID: marketID}
 			} else {
 				c.Logger.Debug("client already subscribed to market", "market_id", marketID)

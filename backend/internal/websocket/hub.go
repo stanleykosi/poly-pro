@@ -110,15 +110,25 @@ func (h *Hub) Run() {
 				h.logger.Info("client unregistered", "remote_addr", client.Conn.RemoteAddr())
 			}
 		case sub := <-h.Subscribe:
-			h.logger.Info("📨 hub: received subscription request", "market_id", sub.marketID, "client_addr", sub.client.Conn.RemoteAddr())
+			h.logger.Info("📨 hub: received subscription request", 
+				"market_id", sub.marketID, 
+				"market_id_length", len(sub.marketID),
+				"market_id_bytes", []byte(sub.marketID),
+				"client_addr", sub.client.Conn.RemoteAddr())
 			if _, ok := h.subscriptions[sub.marketID]; !ok {
 				h.subscriptions[sub.marketID] = make(map[*Client]bool)
 				// First client for this market, so we subscribe to the Redis channel.
-				h.logger.Info("🆕 hub: first subscription to market, starting Redis listener", "market_id", sub.marketID)
+				h.logger.Info("🆕 hub: first subscription to market, starting Redis listener", 
+					"market_id", sub.marketID,
+					"redis_channel", "market:"+sub.marketID)
 				go h.listenToMarket(sub.marketID)
 			}
 			h.subscriptions[sub.marketID][sub.client] = true
-			h.logger.Info("✅ hub: client subscribed to market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr(), "total_clients_for_market", len(h.subscriptions[sub.marketID]), "all_subscriptions", len(h.subscriptions))
+			h.logger.Info("✅ hub: client subscribed to market", 
+				"market_id", sub.marketID, 
+				"client", sub.client.Conn.RemoteAddr(), 
+				"total_clients_for_market", len(h.subscriptions[sub.marketID]), 
+				"all_subscriptions", len(h.subscriptions))
 		case sub := <-h.Unsubscribe:
 			if market, ok := h.subscriptions[sub.marketID]; ok {
 				delete(market, sub.client)
@@ -138,7 +148,11 @@ func (h *Hub) listenToMarket(marketID string) {
 	pubsub := h.redisClient.Subscribe(h.ctx, channel)
 	defer pubsub.Close()
 
-	h.logger.Info("subscribing to redis channel", "channel", channel)
+	h.logger.Info("subscribing to redis channel", 
+		"channel", channel, 
+		"market_id", marketID,
+		"market_id_length", len(marketID),
+		"market_id_bytes", []byte(marketID))
 
 	ch := pubsub.Channel()
 	messageCount := 0
@@ -151,7 +165,11 @@ func (h *Hub) listenToMarket(marketID string) {
 		case msg := <-ch:
 			messageCount++
 			if messageCount == 1 {
-				h.logger.Info("✅ hub: received first message from Redis", "channel", channel, "market_id", marketID, "payload_size", len(msg.Payload))
+				h.logger.Info("✅ hub: received first message from Redis", 
+					"channel", channel, 
+					"market_id", marketID,
+					"market_id_length", len(marketID),
+					"payload_size", len(msg.Payload))
 			}
 			if messageCount%100 == 0 {
 				h.logger.Info("hub: messages from Redis", "channel", channel, "count", messageCount)
@@ -160,7 +178,12 @@ func (h *Hub) listenToMarket(marketID string) {
 			if messageCount <= 3 {
 				var msgData map[string]interface{}
 				if err := json.Unmarshal([]byte(msg.Payload), &msgData); err == nil {
-					h.logger.Info("hub: message content", "market_id", marketID, "event_type", msgData["event_type"], "has_bids", msgData["bids"] != nil, "has_asks", msgData["asks"] != nil)
+					h.logger.Info("hub: message content", 
+						"market_id", marketID, 
+						"message_market_field", msgData["market"],
+						"event_type", msgData["event_type"], 
+						"has_bids", msgData["bids"] != nil, 
+						"has_asks", msgData["asks"] != nil)
 				}
 			}
 			h.broadcastToMarket(marketID, []byte(msg.Payload))
@@ -192,7 +215,16 @@ func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 			}
 		}
 	} else {
-		h.logger.Warn("hub: no clients subscribed to market", "market_id", marketID, "available_markets", len(h.subscriptions))
+		// Log all subscribed market IDs to help debug mismatches
+		subscribedMarkets := make([]string, 0, len(h.subscriptions))
+		for mID := range h.subscriptions {
+			subscribedMarkets = append(subscribedMarkets, mID)
+		}
+		h.logger.Warn("hub: no clients subscribed to market", 
+			"market_id", marketID, 
+			"market_id_length", len(marketID),
+			"available_markets", len(h.subscriptions),
+			"subscribed_markets", subscribedMarkets)
 	}
 }
 

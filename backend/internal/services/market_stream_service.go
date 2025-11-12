@@ -324,9 +324,11 @@ func (s *MarketStreamService) RunStream() {
 		// Only log first few publishes to avoid spam
 		if messageCount <= 3 {
 			s.logger.Info("📤 published to Redis", 
-				"condition_id", conditionID, 
+				"condition_id", conditionID,
+				"condition_id_length", len(conditionID),
 				"asset_id", bookMsg.AssetID,
-				"channel", channel)
+				"channel", channel,
+				"channel_length", len(channel))
 		}
 		return nil
 	}
