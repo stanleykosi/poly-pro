@@ -67,6 +67,28 @@ func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Queri
 		lastStatusLog: time.Now(),
 	}
 	
+	// Test database connection by running a simple query
+	testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	
+	// Try to query for any existing data to verify connection
+	testParams := db.GetMarketPriceHistoryParams{
+		MarketID:   "test-connection",
+		Time:       pgtype.Timestamptz{Time: time.Now().Add(-24 * time.Hour), Valid: true},
+		Time_2:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Resolution: "1",
+	}
+	_, err := store.GetMarketPriceHistory(testCtx, testParams)
+	if err != nil {
+		// Log error but don't fail - the query might fail if table doesn't exist or no data
+		// The important thing is that we can connect to the database
+		logger.Warn("⚠️  OHLCV aggregator: database connection test query failed (this may be normal if no data exists)",
+			"error", err,
+			"note", "This is just a connection test, not a critical error")
+	} else {
+		logger.Info("✅ OHLCV aggregator: database connection verified")
+	}
+	
 	// Start periodic status logging
 	go agg.periodicStatusLog()
 	
@@ -266,10 +288,16 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	verifyCtx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
 	defer cancel()
 	
+	// Use a small time range around the bar's start time for verification
+	// The SQL query uses time >= $2 AND time <= $3, so we need a range
+	var verifyTimeStart, verifyTimeEnd pgtype.Timestamptz
+	verifyTimeStart.Scan(bar.StartTime.Add(-1 * time.Second))
+	verifyTimeEnd.Scan(bar.StartTime.Add(1 * time.Second))
+	
 	verifyParams := db.GetMarketPriceHistoryParams{
 		MarketID:   bar.MarketID,
-		Time:       timeVal,
-		Time_2:     timeVal,
+		Time:       verifyTimeStart,
+		Time_2:     verifyTimeEnd,
 		Resolution: bar.Resolution,
 	}
 	verifyResults, verifyErr := a.store.GetMarketPriceHistory(verifyCtx, verifyParams)
@@ -484,11 +512,12 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 	}
 	a.mu.Unlock()
 
-	// Log periodic flush activity (every 10th flush to avoid spam)
-	if totalBarsChecked > 0 {
-		a.logger.Debug("periodic flush check", 
+	// Log periodic flush activity
+	if totalBarsChecked > 0 || len(barsToSave) > 0 {
+		a.logger.Info("🔄 periodic flush check", 
 			"bars_checked", totalBarsChecked,
-			"bars_to_save", len(barsToSave))
+			"bars_to_save", len(barsToSave),
+			"now", now.Format(time.RFC3339))
 	}
 
 	// Second pass: save completed bars (outside the lock to avoid holding it during DB operations)
