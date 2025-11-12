@@ -138,9 +138,13 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
-		a.logger.Debug("created new OHLCV bar", 
+		barEndTime := a.getBarEndTime(barStartTime, resolution)
+		a.logger.Info("🆕 created new OHLCV bar", 
 			"market_id", marketID, 
-			"resolution", resolution)
+			"resolution", resolution,
+			"start_time", barStartTime,
+			"end_time", barEndTime,
+			"initial_price", price)
 	}
 
 	// Update the bar with the new price
@@ -236,9 +240,15 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	}
 
 	a.totalBarsSaved++
-	a.logger.Debug("OHLCV bar saved", 
+	a.logger.Info("✅ OHLCV bar saved to database", 
 		"market_id", bar.MarketID, 
 		"resolution", bar.Resolution,
+		"start_time", bar.StartTime,
+		"open", bar.Open,
+		"high", bar.High,
+		"low", bar.Low,
+		"close", bar.Close,
+		"updates", bar.Count,
 		"total_saved", a.totalBarsSaved)
 	return nil
 }
@@ -399,13 +409,16 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 
 	a.mu.Lock()
 	// First pass: identify completed bars
+	totalBarsChecked := 0
 	for marketID, resolutions := range a.bars {
 		for resolution, bar := range resolutions {
+			totalBarsChecked++
 			// Calculate when this bar's time period ends
 			barEndTime := a.getBarEndTime(bar.StartTime, bar.Resolution)
 			
-			// If the current time is past the bar's end time, it's completed
-			if now.After(barEndTime) || now.Equal(barEndTime) {
+			// Use a small tolerance (1 second) to account for timing differences
+			// If the current time is past the bar's end time (with tolerance), it's completed
+			if now.After(barEndTime.Add(-time.Second)) {
 				barsToSave = append(barsToSave, bar)
 				barsToRemove = append(barsToRemove, struct {
 					marketID   string
@@ -416,21 +429,33 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 	}
 	a.mu.Unlock()
 
+	// Log periodic flush activity (every 10th flush to avoid spam)
+	if totalBarsChecked > 0 {
+		a.logger.Debug("periodic flush check", 
+			"bars_checked", totalBarsChecked,
+			"bars_to_save", len(barsToSave))
+	}
+
 	// Second pass: save completed bars (outside the lock to avoid holding it during DB operations)
 	if len(barsToSave) > 0 {
 		a.logger.Info("💾 flushing completed bars", "count", len(barsToSave))
 		for _, bar := range barsToSave {
+			barEndTime := a.getBarEndTime(bar.StartTime, bar.Resolution)
 			if err := a.saveBar(bar); err != nil {
 				a.logger.Error("failed to flush completed bar", 
 					"error", err, 
 					"market_id", bar.MarketID, 
 					"resolution", bar.Resolution,
-					"start_time", bar.StartTime)
+					"start_time", bar.StartTime,
+					"end_time", barEndTime,
+					"now", now)
 			} else {
-				a.logger.Debug("flushed completed bar",
+				a.logger.Info("✅ flushed completed bar",
 					"market_id", bar.MarketID,
 					"resolution", bar.Resolution,
-					"start_time", bar.StartTime)
+					"start_time", bar.StartTime,
+					"end_time", barEndTime,
+					"updates_in_bar", bar.Count)
 			}
 		}
 
