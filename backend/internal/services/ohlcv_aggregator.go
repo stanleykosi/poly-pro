@@ -138,19 +138,36 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	barStartTime := a.getBarStartTime(timestamp, resolution)
 
 	// Log timestamp details for first few updates to debug date issues
-	if a.totalUpdates <= 5 {
-		now := time.Now().UTC()
+	now := time.Now().UTC()
+	if a.totalUpdates <= 10 {
 		a.logger.Info("🔍 timestamp flow in aggregator",
 			"update", a.totalUpdates,
 			"market_id", marketID,
 			"resolution", resolution,
 			"input_timestamp", timestamp.Format(time.RFC3339),
+			"input_timestamp_date", timestamp.Format("2006-01-02"),
 			"input_timestamp_unix", timestamp.Unix(),
 			"bar_start_time", barStartTime.Format(time.RFC3339),
+			"bar_start_time_date", barStartTime.Format("2006-01-02"),
 			"bar_start_time_unix", barStartTime.Unix(),
 			"current_time_utc", now.Format(time.RFC3339),
+			"current_time_date", now.Format("2006-01-02"),
 			"diff_from_now", now.Sub(timestamp),
-			"bar_date", barStartTime.Format("2006-01-02"))
+			"bar_date_matches_current", barStartTime.Format("2006-01-02") == now.Format("2006-01-02"))
+	}
+	
+	// Additional validation: if the bar start time is more than 1 day old, log a warning
+	// This helps catch cases where stale timestamps are creating bars with old dates
+	barDateDiff := now.Sub(barStartTime)
+	if barDateDiff > 24*time.Hour && a.totalUpdates <= 20 {
+		a.logger.Warn("⚠️  bar start time is more than 1 day old",
+			"bar_start_time", barStartTime.Format(time.RFC3339),
+			"bar_start_time_date", barStartTime.Format("2006-01-02"),
+			"current_time", now.Format(time.RFC3339),
+			"current_time_date", now.Format("2006-01-02"),
+			"age", barDateDiff,
+			"market_id", marketID,
+			"resolution", resolution)
 	}
 
 	// Get or create the current bar
@@ -353,12 +370,21 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	}
 
 	a.totalBarsSaved++
+	
+	// Log the date being saved to help debug timestamp issues
+	currentDate := time.Now().UTC().Format("2006-01-02")
+	savedDate := utcTime.Format("2006-01-02")
+	dateMatches := savedDate == currentDate
+	
 	a.logger.Info("✅ OHLCV bar saved to database", 
 		"market_id", bar.MarketID, 
 		"resolution", bar.Resolution,
 		"start_time_utc", utcTime,
 		"start_time_rfc3339", utcTime.Format(time.RFC3339),
+		"start_time_date", savedDate,
 		"start_time_unix", utcTime.Unix(),
+		"current_date", currentDate,
+		"date_matches_current", dateMatches,
 		"open", bar.Open,
 		"high", bar.High,
 		"low", bar.Low,
@@ -366,6 +392,17 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		"updates", bar.Count,
 		"total_saved", a.totalBarsSaved,
 		"verified", len(verifyResults) > 0)
+	
+	// Warn if the date doesn't match current date
+	if !dateMatches {
+		a.logger.Warn("⚠️  saved bar date does not match current date",
+			"saved_date", savedDate,
+			"current_date", currentDate,
+			"market_id", bar.MarketID,
+			"resolution", bar.Resolution,
+			"start_time_utc", utcTime.Format(time.RFC3339))
+	}
+	
 	return nil
 }
 

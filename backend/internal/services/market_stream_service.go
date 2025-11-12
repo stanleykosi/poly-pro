@@ -304,12 +304,19 @@ func (s *MarketStreamService) RunStream() {
 				// This handles cases where WebSocket timestamps might be stale or incorrectly formatted
 				now := time.Now().UTC()
 				timeDiff := now.Sub(timestamp)
-				if timeDiff > 1*time.Hour || timeDiff < -1*time.Hour {
-					if messageCount <= 5 {
-						s.logger.Warn("⚠️  WebSocket timestamp seems invalid, using current time",
+				
+				// More aggressive validation: if timestamp is more than 5 minutes old or in the future, use current time
+				// This ensures we always use recent timestamps for OHLCV aggregation
+				if timeDiff > 5*time.Minute || timeDiff < -1*time.Minute {
+					// Always log when we replace a timestamp (not just first 5)
+					if messageCount <= 10 || messageCount%1000 == 0 {
+						s.logger.Warn("⚠️  WebSocket timestamp replaced with current time",
 							"websocket_timestamp", timestamp.Format(time.RFC3339),
+							"websocket_timestamp_date", timestamp.Format("2006-01-02"),
 							"time_diff", timeDiff,
-							"using_current_time", now.Format(time.RFC3339))
+							"using_current_time", now.Format(time.RFC3339),
+							"current_time_date", now.Format("2006-01-02"),
+							"message_count", messageCount)
 					}
 					timestamp = now
 				}
