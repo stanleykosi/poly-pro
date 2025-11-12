@@ -196,7 +196,9 @@ func (a *OHLCVAggregator) getBarStartTime(timestamp time.Time, resolution string
 	case "60": // 1 hour
 		return timestamp.Truncate(time.Hour)
 	case "D": // 1 day
-		return time.Date(timestamp.Year(), timestamp.Month(), timestamp.Day(), 0, 0, 0, 0, timestamp.Location())
+		// Ensure we use UTC for daily bars to avoid timezone issues
+		utcTimestamp := timestamp.UTC()
+		return time.Date(utcTimestamp.Year(), utcTimestamp.Month(), utcTimestamp.Day(), 0, 0, 0, 0, time.UTC)
 	default:
 		return timestamp.Truncate(time.Hour)
 	}
@@ -204,9 +206,13 @@ func (a *OHLCVAggregator) getBarStartTime(timestamp time.Time, resolution string
 
 // saveBar saves a completed bar to the database.
 func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
+	// Ensure the timestamp is in UTC before storing
+	// This prevents timezone-related issues when storing timestamps
+	utcTime := bar.StartTime.UTC()
+	
 	// Convert to database types
 	var timeVal pgtype.Timestamptz
-	if err := timeVal.Scan(bar.StartTime); err != nil {
+	if err := timeVal.Scan(utcTime); err != nil {
 		return err
 	}
 
@@ -256,11 +262,14 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		PResolution: bar.Resolution,
 	}
 
-	// Log the insert attempt with full details
+	// Log the insert attempt with full details, including UTC timestamp
 	a.logger.Debug("attempting to insert OHLCV bar",
 		"market_id", bar.MarketID,
 		"resolution", bar.Resolution,
-		"start_time", bar.StartTime,
+		"start_time_original", bar.StartTime,
+		"start_time_utc", utcTime,
+		"start_time_rfc3339", utcTime.Format(time.RFC3339),
+		"start_time_unix", utcTime.Unix(),
 		"time_valid", timeVal.Valid,
 		"open", bar.Open,
 		"high", bar.High,
@@ -274,7 +283,9 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 			"error_type", fmt.Sprintf("%T", err),
 			"market_id", bar.MarketID,
 			"resolution", bar.Resolution,
-			"start_time", bar.StartTime,
+			"start_time_original", bar.StartTime,
+			"start_time_utc", utcTime,
+			"start_time_rfc3339", utcTime.Format(time.RFC3339),
 			"time_valid", timeVal.Valid,
 			"open", bar.Open,
 			"high", bar.High,
@@ -291,8 +302,8 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	// Use a small time range around the bar's start time for verification
 	// The SQL query uses time >= $2 AND time <= $3, so we need a range
 	var verifyTimeStart, verifyTimeEnd pgtype.Timestamptz
-	verifyTimeStart.Scan(bar.StartTime.Add(-1 * time.Second))
-	verifyTimeEnd.Scan(bar.StartTime.Add(1 * time.Second))
+	verifyTimeStart.Scan(utcTime.Add(-1 * time.Second))
+	verifyTimeEnd.Scan(utcTime.Add(1 * time.Second))
 	
 	verifyParams := db.GetMarketPriceHistoryParams{
 		MarketID:   bar.MarketID,
@@ -306,12 +317,14 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 			"error", verifyErr,
 			"market_id", bar.MarketID,
 			"resolution", bar.Resolution,
-			"start_time", bar.StartTime)
+			"start_time_utc", utcTime,
+			"start_time_rfc3339", utcTime.Format(time.RFC3339))
 	} else if len(verifyResults) == 0 {
 		a.logger.Error("❌ insert appeared to succeed but data not found in database",
 			"market_id", bar.MarketID,
 			"resolution", bar.Resolution,
-			"start_time", bar.StartTime,
+			"start_time_utc", utcTime,
+			"start_time_rfc3339", utcTime.Format(time.RFC3339),
 			"this_indicates_a_database_issue")
 	} else {
 		// Successfully verified
@@ -325,7 +338,9 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	a.logger.Info("✅ OHLCV bar saved to database", 
 		"market_id", bar.MarketID, 
 		"resolution", bar.Resolution,
-		"start_time", bar.StartTime,
+		"start_time_utc", utcTime,
+		"start_time_rfc3339", utcTime.Format(time.RFC3339),
+		"start_time_unix", utcTime.Unix(),
 		"open", bar.Open,
 		"high", bar.High,
 		"low", bar.Low,

@@ -278,7 +278,8 @@ func (s *MarketStreamService) RunStream() {
 			// Parse timestamp (assuming it's in milliseconds)
 			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 			if err == nil {
-				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
+				// time.Unix returns UTC, but we'll explicitly convert to UTC to be safe
+				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000).UTC()
 				// Use conditionID for OHLCV aggregation to ensure bars are stored under the correct market ID
 				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, timestamp); err != nil {
 					s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID)
