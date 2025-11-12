@@ -27,6 +27,7 @@ package websocket
 import (
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -118,23 +119,33 @@ func (c *Client) handleMessage(message []byte) {
 	switch msg.Type {
 	case "subscribe":
 		for _, marketID := range msg.MarketIDs {
-			if !c.Subscriptions[marketID] {
-				c.Subscriptions[marketID] = true
+			// Normalize market ID (trim whitespace)
+			normalizedMarketID := strings.TrimSpace(marketID)
+			if normalizedMarketID != marketID {
+				c.Logger.Warn("client: market ID had whitespace, normalized", 
+					"original", marketID,
+					"normalized", normalizedMarketID)
+			}
+			
+			if !c.Subscriptions[normalizedMarketID] {
+				c.Subscriptions[normalizedMarketID] = true
 				c.Logger.Info("📥 client: sending subscription to hub", 
-					"market_id", marketID,
-					"market_id_length", len(marketID),
-					"market_id_bytes", []byte(marketID),
+					"market_id", normalizedMarketID,
+					"market_id_length", len(normalizedMarketID),
+					"market_id_bytes", []byte(normalizedMarketID),
 					"client_addr", c.Conn.RemoteAddr())
-				c.Hub.Subscribe <- subscription{client: c, marketID: marketID}
+				c.Hub.Subscribe <- subscription{client: c, marketID: normalizedMarketID}
 			} else {
-				c.Logger.Debug("client already subscribed to market", "market_id", marketID)
+				c.Logger.Debug("client already subscribed to market", "market_id", normalizedMarketID)
 			}
 		}
 	case "unsubscribe":
 		for _, marketID := range msg.MarketIDs {
-			if c.Subscriptions[marketID] {
-				delete(c.Subscriptions, marketID)
-				c.Hub.Unsubscribe <- subscription{client: c, marketID: marketID}
+			// Normalize market ID (trim whitespace)
+			normalizedMarketID := strings.TrimSpace(marketID)
+			if c.Subscriptions[normalizedMarketID] {
+				delete(c.Subscriptions, normalizedMarketID)
+				c.Hub.Unsubscribe <- subscription{client: c, marketID: normalizedMarketID}
 			}
 		}
 	default:

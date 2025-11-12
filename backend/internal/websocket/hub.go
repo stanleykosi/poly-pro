@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
@@ -112,44 +113,56 @@ func (h *Hub) Run() {
 				h.logger.Info("client unregistered", "remote_addr", client.Conn.RemoteAddr())
 			}
 		case sub := <-h.Subscribe:
+			// Normalize market ID (trim whitespace)
+			normalizedMarketID := strings.TrimSpace(sub.marketID)
+			if normalizedMarketID != sub.marketID {
+				h.logger.Warn("market ID had whitespace, normalized", 
+					"original", sub.marketID,
+					"normalized", normalizedMarketID,
+					"original_length", len(sub.marketID),
+					"normalized_length", len(normalizedMarketID))
+			}
+			
 			h.logger.Info("📨 hub: received subscription request", 
-				"market_id", sub.marketID, 
-				"market_id_length", len(sub.marketID),
-				"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
-				"market_id_bytes", []byte(sub.marketID),
+				"market_id", normalizedMarketID, 
+				"market_id_length", len(normalizedMarketID),
+				"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)),
+				"market_id_bytes", []byte(normalizedMarketID),
 				"client_addr", sub.client.Conn.RemoteAddr())
-			if _, ok := h.subscriptions[sub.marketID]; !ok {
-				h.subscriptions[sub.marketID] = make(map[*Client]bool)
+			if _, ok := h.subscriptions[normalizedMarketID]; !ok {
+				h.subscriptions[normalizedMarketID] = make(map[*Client]bool)
 				// First client for this market, so we subscribe to the Redis channel.
 				h.logger.Info("🆕 hub: first subscription to market, starting Redis listener", 
-					"market_id", sub.marketID,
-					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
-					"redis_channel", "market:"+sub.marketID)
-				go h.listenToMarket(sub.marketID)
+					"market_id", normalizedMarketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)),
+					"redis_channel", "market:"+normalizedMarketID)
+				go h.listenToMarket(normalizedMarketID)
 			}
-			h.subscriptions[sub.marketID][sub.client] = true
+			h.subscriptions[normalizedMarketID][sub.client] = true
 			// Verify the subscription was stored correctly
-			if storedMarket, ok := h.subscriptions[sub.marketID]; ok {
+			if storedMarket, ok := h.subscriptions[normalizedMarketID]; ok {
 				h.logger.Info("✅ hub: client subscribed to market", 
-					"market_id", sub.marketID,
-					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
+					"market_id", normalizedMarketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)),
 					"client", sub.client.Conn.RemoteAddr(), 
 					"total_clients_for_market", len(storedMarket), 
 					"all_subscriptions", len(h.subscriptions),
 					"subscription_verified", true)
 			} else {
 				h.logger.Error("❌ hub: subscription NOT found after storing!", 
-					"market_id", sub.marketID,
-					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)))
+					"market_id", normalizedMarketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)))
 			}
 		case sub := <-h.Unsubscribe:
-			if market, ok := h.subscriptions[sub.marketID]; ok {
+			// Normalize market ID (trim whitespace)
+			normalizedMarketID := strings.TrimSpace(sub.marketID)
+			if market, ok := h.subscriptions[normalizedMarketID]; ok {
 				delete(market, sub.client)
 				if len(market) == 0 {
-					delete(h.subscriptions, sub.marketID)
+					delete(h.subscriptions, normalizedMarketID)
 					// Again, optionally unsubscribe from Redis here.
 				}
-				h.logger.Info("client unsubscribed from market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr())
+				h.logger.Info("client unsubscribed from market", "market_id", normalizedMarketID, "client", sub.client.Conn.RemoteAddr())
 			}
 		}
 	}
@@ -191,9 +204,13 @@ func (h *Hub) listenToMarket(marketID string) {
 			if messageCount <= 3 {
 				var msgData map[string]interface{}
 				if err := json.Unmarshal([]byte(msg.Payload), &msgData); err == nil {
+					messageMarketID, _ := msgData["market"].(string)
 					h.logger.Info("hub: message content", 
-						"market_id", marketID, 
-						"message_market_field", msgData["market"],
+						"subscription_market_id", marketID,
+						"subscription_market_id_hex", fmt.Sprintf("%x", []byte(marketID)),
+						"message_market_field", messageMarketID,
+						"message_market_field_hex", fmt.Sprintf("%x", []byte(messageMarketID)),
+						"market_ids_match", marketID == messageMarketID,
 						"event_type", msgData["event_type"], 
 						"has_bids", msgData["bids"] != nil, 
 						"has_asks", msgData["asks"] != nil)
@@ -208,23 +225,31 @@ func (h *Hub) listenToMarket(marketID string) {
 var broadcastCallCount int64
 
 func (h *Hub) broadcastToMarket(marketID string, message []byte) {
+	// Normalize market ID (trim whitespace)
+	normalizedMarketID := strings.TrimSpace(marketID)
+	if normalizedMarketID != marketID {
+		h.logger.Warn("broadcastToMarket: market ID had whitespace, normalized", 
+			"original", marketID,
+			"normalized", normalizedMarketID)
+	}
+	
 	// Log the exact marketID being used for lookup
 	callCount := atomic.AddInt64(&broadcastCallCount, 1)
 	if callCount <= 5 {
 		h.logger.Info("🔍 hub: broadcastToMarket called", 
-			"market_id", marketID,
-			"market_id_length", len(marketID),
-			"market_id_hex", fmt.Sprintf("%x", []byte(marketID)),
+			"market_id", normalizedMarketID,
+			"market_id_length", len(normalizedMarketID),
+			"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)),
 			"subscriptions_map_size", len(h.subscriptions),
 			"call_count", callCount)
 	}
 	
-	if market, ok := h.subscriptions[marketID]; ok {
+	if market, ok := h.subscriptions[normalizedMarketID]; ok {
 		if len(market) > 0 {
 			// Log first few broadcasts to verify messages are being sent
 			if callCount <= 5 {
 				h.logger.Info("✅ hub: found subscription, broadcasting", 
-					"market_id", marketID, 
+					"market_id", normalizedMarketID, 
 					"num_clients", len(market), 
 					"message_size", len(message),
 					"call_count", callCount)
@@ -237,7 +262,7 @@ func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 			default:
 				// If the client's send buffer is full, assume it's slow or disconnected.
 				// Unregister the client to prevent blocking.
-				h.logger.Warn("client send buffer full, unregistering", "market_id", marketID, "client", client.Conn.RemoteAddr())
+				h.logger.Warn("client send buffer full, unregistering", "market_id", normalizedMarketID, "client", client.Conn.RemoteAddr())
 				close(client.Send)
 				delete(h.clients, client)
 				// Also remove from the specific subscription
@@ -253,9 +278,9 @@ func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 			subscribedMarketsHex = append(subscribedMarketsHex, fmt.Sprintf("%x", []byte(mID)))
 		}
 		h.logger.Warn("❌ hub: no clients subscribed to market", 
-			"market_id", marketID, 
-			"market_id_length", len(marketID),
-			"market_id_hex", fmt.Sprintf("%x", []byte(marketID)),
+			"market_id", normalizedMarketID, 
+			"market_id_length", len(normalizedMarketID),
+			"market_id_hex", fmt.Sprintf("%x", []byte(normalizedMarketID)),
 			"available_markets", len(h.subscriptions),
 			"subscribed_markets", subscribedMarkets,
 			"subscribed_markets_hex", subscribedMarketsHex)
