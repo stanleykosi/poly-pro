@@ -234,9 +234,63 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		PResolution: bar.Resolution,
 	}
 
+	// Log the insert attempt with full details
+	a.logger.Debug("attempting to insert OHLCV bar",
+		"market_id", bar.MarketID,
+		"resolution", bar.Resolution,
+		"start_time", bar.StartTime,
+		"time_valid", timeVal.Valid,
+		"open", bar.Open,
+		"high", bar.High,
+		"low", bar.Low,
+		"close", bar.Close)
+
 	if err := a.store.InsertMarketPriceHistory(a.ctx, arg); err != nil {
-		a.logger.Error("failed to insert market price history", "error", err, "market_id", bar.MarketID, "resolution", bar.Resolution)
-		return err
+		// Log detailed error information
+		a.logger.Error("❌ failed to insert market price history",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"market_id", bar.MarketID,
+			"resolution", bar.Resolution,
+			"start_time", bar.StartTime,
+			"time_valid", timeVal.Valid,
+			"open", bar.Open,
+			"high", bar.High,
+			"low", bar.Low,
+			"close", bar.Close)
+		return fmt.Errorf("database insert failed: %w", err)
+	}
+
+	// Verify the insert by querying the database
+	// This helps catch cases where the insert appears to succeed but data isn't actually saved
+	verifyCtx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	defer cancel()
+	
+	verifyParams := db.GetMarketPriceHistoryParams{
+		MarketID:   bar.MarketID,
+		Time:       timeVal,
+		Time_2:     timeVal,
+		Resolution: bar.Resolution,
+	}
+	verifyResults, verifyErr := a.store.GetMarketPriceHistory(verifyCtx, verifyParams)
+	if verifyErr != nil {
+		a.logger.Warn("⚠️  insert succeeded but verification query failed",
+			"error", verifyErr,
+			"market_id", bar.MarketID,
+			"resolution", bar.Resolution,
+			"start_time", bar.StartTime)
+	} else if len(verifyResults) == 0 {
+		a.logger.Error("❌ insert appeared to succeed but data not found in database",
+			"market_id", bar.MarketID,
+			"resolution", bar.Resolution,
+			"start_time", bar.StartTime,
+			"this_indicates_a_database_issue")
+	} else {
+		// Successfully verified
+		a.logger.Debug("verified insert in database",
+			"market_id", bar.MarketID,
+			"resolution", bar.Resolution,
+			"start_time", bar.StartTime)
 	}
 
 	a.totalBarsSaved++
@@ -249,7 +303,8 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		"low", bar.Low,
 		"close", bar.Close,
 		"updates", bar.Count,
-		"total_saved", a.totalBarsSaved)
+		"total_saved", a.totalBarsSaved,
+		"verified", len(verifyResults) > 0)
 	return nil
 }
 
