@@ -75,6 +75,7 @@ func (c *Client) ReadPump() {
 	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.Conn.SetPongHandler(func(string) error { c.Conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 
+	messageCount := 0
 	for {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
@@ -83,26 +84,39 @@ func (c *Client) ReadPump() {
 			}
 			break
 		}
+		messageCount++
+		if messageCount == 1 {
+			c.Logger.Info("✅ client: received first message", "remote_addr", c.Conn.RemoteAddr(), "message_size", len(message), "message_preview", string(message[:min(len(message), 200)]))
+		}
 		c.handleMessage(message)
 	}
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // handleMessage processes incoming messages from the client, such as subscription requests.
 func (c *Client) handleMessage(message []byte) {
+	c.Logger.Info("🔍 client: processing message", "remote_addr", c.Conn.RemoteAddr(), "message_size", len(message), "raw_message", string(message))
+	
 	var msg subscriptionMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
-		c.Logger.Warn("failed to unmarshal client message", "error", err, "message", string(message))
+		c.Logger.Warn("❌ client: failed to unmarshal message", "error", err, "message", string(message), "remote_addr", c.Conn.RemoteAddr())
 		return
 	}
 
-	c.Logger.Info("received message from client", "type", msg.Type, "markets", msg.MarketIDs, "client_addr", c.Conn.RemoteAddr())
+	c.Logger.Info("✅ client: parsed message", "type", msg.Type, "markets", msg.MarketIDs, "markets_count", len(msg.MarketIDs), "client_addr", c.Conn.RemoteAddr())
 
 	switch msg.Type {
 	case "subscribe":
 		for _, marketID := range msg.MarketIDs {
 			if !c.Subscriptions[marketID] {
 				c.Subscriptions[marketID] = true
-				c.Logger.Info("client subscribing to market", "market_id", marketID, "client_addr", c.Conn.RemoteAddr())
+				c.Logger.Info("📥 client: sending subscription to hub", "market_id", marketID, "client_addr", c.Conn.RemoteAddr())
 				c.Hub.Subscribe <- subscription{client: c, marketID: marketID}
 			} else {
 				c.Logger.Debug("client already subscribed to market", "market_id", marketID)

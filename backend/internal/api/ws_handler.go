@@ -62,6 +62,7 @@ func (server *Server) serveWs(c *gin.Context) {
 	}
 
 	// Register the new client with the hub.
+	server.logger.Info("🔌 ws_handler: client created, registering with hub", "remote_addr", conn.RemoteAddr())
 	server.hub.Register <- client
 
 	// Allow collection of memory referenced by the caller by doing all work in
@@ -69,6 +70,6 @@ func (server *Server) serveWs(c *gin.Context) {
 	go client.WritePump()
 	go client.ReadPump()
 
-	server.logger.Info("websocket client connected", "remote_addr", conn.RemoteAddr())
+	server.logger.Info("✅ ws_handler: websocket client connected and pumps started", "remote_addr", conn.RemoteAddr())
 }
 

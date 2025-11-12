@@ -91,7 +91,7 @@ func (h *Hub) Run() {
 			return
 		case client := <-h.Register:
 			h.clients[client] = true
-			h.logger.Info("new client registered", "remote_addr", client.Conn.RemoteAddr())
+			h.logger.Info("✅ hub: new client registered", "remote_addr", client.Conn.RemoteAddr(), "total_clients", len(h.clients))
 		case client := <-h.Unregister:
 			if _, ok := h.clients[client]; ok {
 				// Remove client from all its subscriptions
@@ -110,14 +110,15 @@ func (h *Hub) Run() {
 				h.logger.Info("client unregistered", "remote_addr", client.Conn.RemoteAddr())
 			}
 		case sub := <-h.Subscribe:
+			h.logger.Info("📨 hub: received subscription request", "market_id", sub.marketID, "client_addr", sub.client.Conn.RemoteAddr())
 			if _, ok := h.subscriptions[sub.marketID]; !ok {
 				h.subscriptions[sub.marketID] = make(map[*Client]bool)
 				// First client for this market, so we subscribe to the Redis channel.
-				h.logger.Info("first subscription to market, starting Redis listener", "market_id", sub.marketID)
+				h.logger.Info("🆕 hub: first subscription to market, starting Redis listener", "market_id", sub.marketID)
 				go h.listenToMarket(sub.marketID)
 			}
 			h.subscriptions[sub.marketID][sub.client] = true
-			h.logger.Info("✅ client subscribed to market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr(), "total_clients_for_market", len(h.subscriptions[sub.marketID]))
+			h.logger.Info("✅ hub: client subscribed to market", "market_id", sub.marketID, "client", sub.client.Conn.RemoteAddr(), "total_clients_for_market", len(h.subscriptions[sub.marketID]), "all_subscriptions", len(h.subscriptions))
 		case sub := <-h.Unsubscribe:
 			if market, ok := h.subscriptions[sub.marketID]; ok {
 				delete(market, sub.client)
