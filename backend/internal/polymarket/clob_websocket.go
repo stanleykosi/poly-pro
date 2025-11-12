@@ -184,7 +184,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if err := json.Unmarshal(message, &bookMessages); err == nil && len(bookMessages) > 0 {
 				// Successfully parsed as array of book messages
 				if messageCount == 1 {
-					c.logger.Info("WebSocket: parsed initial snapshot", 
+					c.logger.Info("✅ WebSocket: received initial snapshot", 
 						"messages", len(bookMessages))
 				}
 				// Process each book message in the array
@@ -203,7 +203,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if err := json.Unmarshal(message, &bookMsg); err == nil && bookMsg.EventType == "book" {
 				// Successfully parsed as book message
 				if messageCount == 1 {
-					c.logger.Info("WebSocket: parsed first book message", "market", bookMsg.Market)
+					c.logger.Info("✅ WebSocket: received first book message", "market", bookMsg.Market)
 				}
 				if err := handler(&bookMsg); err != nil {
 					c.logger.Error("error handling book message", "error", err)
@@ -247,7 +247,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				if wsMsg.EventType == "book" {
 					if err := json.Unmarshal(wsMsg.Data, &bookMsg); err == nil {
 						if messageCount == 1 {
-							c.logger.Info("WebSocket: parsed wrapped book message", "market", bookMsg.Market)
+							c.logger.Info("✅ WebSocket: received wrapped book message", "market", bookMsg.Market)
 						}
 						if err := handler(&bookMsg); err != nil {
 							c.logger.Error("error handling book message", "error", err)
@@ -285,7 +285,7 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				}
 				// Other message types (subscription confirmations, errors, etc.)
 				if wsMsg.Type == "subscribed" || wsMsg.Type == "subscription" {
-					c.logger.Info("WebSocket: subscription confirmed", "type", wsMsg.Type)
+					c.logger.Info("✅ WebSocket: subscription confirmed", "type", wsMsg.Type)
 				} else {
 					c.logger.Debug("WebSocket: non-book message", "type", wsMsg.Type, "event_type", wsMsg.EventType)
 				}
@@ -294,16 +294,14 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 
 			// If we can't parse it at all, log the raw message for debugging
 			// This helps identify new message types from Polymarket
-			if messageCount <= 10 {
+			if messageCount <= 3 {
 				msgStr := string(message)
-				if len(msgStr) > 200 {
-					msgStr = msgStr[:200] + "..."
+				if len(msgStr) > 100 {
+					msgStr = msgStr[:100] + "..."
 				}
-				c.logger.Warn("WebSocket: unparseable message", 
+				c.logger.Warn("⚠️  WebSocket: unparseable message", 
 					"message", messageCount,
 					"preview", msgStr)
-			} else {
-				c.logger.Debug("WebSocket: unparseable message, skipping", "message", messageCount)
 			}
 		}
 	}
