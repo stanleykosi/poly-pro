@@ -137,6 +137,22 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	// Calculate the start time for this bar based on resolution
 	barStartTime := a.getBarStartTime(timestamp, resolution)
 
+	// Log timestamp details for first few updates to debug date issues
+	if a.totalUpdates <= 5 {
+		now := time.Now().UTC()
+		a.logger.Info("🔍 timestamp flow in aggregator",
+			"update", a.totalUpdates,
+			"market_id", marketID,
+			"resolution", resolution,
+			"input_timestamp", timestamp.Format(time.RFC3339),
+			"input_timestamp_unix", timestamp.Unix(),
+			"bar_start_time", barStartTime.Format(time.RFC3339),
+			"bar_start_time_unix", barStartTime.Unix(),
+			"current_time_utc", now.Format(time.RFC3339),
+			"diff_from_now", now.Sub(timestamp),
+			"bar_date", barStartTime.Format("2006-01-02"))
+	}
+
 	// Get or create the current bar
 	bar, exists := a.bars[marketID][resolution]
 	if !exists || bar.StartTime.Before(barStartTime) {
@@ -165,6 +181,8 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			"market_id", marketID, 
 			"resolution", resolution,
 			"start_time", barStartTime,
+			"start_time_rfc3339", barStartTime.Format(time.RFC3339),
+			"start_time_date", barStartTime.Format("2006-01-02"),
 			"end_time", barEndTime,
 			"initial_price", price)
 	}

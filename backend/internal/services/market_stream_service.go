@@ -278,8 +278,42 @@ func (s *MarketStreamService) RunStream() {
 			// Parse timestamp (assuming it's in milliseconds)
 			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 			if err == nil {
+				// Log timestamp details for debugging (first few messages only)
+				if messageCount <= 5 {
+					// Try both interpretations: milliseconds and seconds
+					timestampAsMs := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000).UTC()
+					timestampAsSec := time.Unix(timestampMs, 0).UTC()
+					now := time.Now().UTC()
+					
+					s.logger.Info("🔍 timestamp debugging",
+						"raw_timestamp_string", bookMsg.Timestamp,
+						"parsed_as_int64", timestampMs,
+						"interpreted_as_ms", timestampAsMs.Format(time.RFC3339),
+						"interpreted_as_sec", timestampAsSec.Format(time.RFC3339),
+						"current_time_utc", now.Format(time.RFC3339),
+						"diff_from_now_ms", now.Sub(timestampAsMs),
+						"diff_from_now_sec", now.Sub(timestampAsSec),
+						"message_count", messageCount)
+				}
+				
 				// time.Unix returns UTC, but we'll explicitly convert to UTC to be safe
+				// Assuming milliseconds: divide by 1000 for seconds, remainder for nanoseconds
 				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000).UTC()
+				
+				// Validate timestamp: if it's more than 1 hour old or more than 1 hour in the future, use current time
+				// This handles cases where WebSocket timestamps might be stale or incorrectly formatted
+				now := time.Now().UTC()
+				timeDiff := now.Sub(timestamp)
+				if timeDiff > 1*time.Hour || timeDiff < -1*time.Hour {
+					if messageCount <= 5 {
+						s.logger.Warn("⚠️  WebSocket timestamp seems invalid, using current time",
+							"websocket_timestamp", timestamp.Format(time.RFC3339),
+							"time_diff", timeDiff,
+							"using_current_time", now.Format(time.RFC3339))
+					}
+					timestamp = now
+				}
+				
 				// Use conditionID for OHLCV aggregation to ensure bars are stored under the correct market ID
 				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, timestamp); err != nil {
 					s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID)

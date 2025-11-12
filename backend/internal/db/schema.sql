@@ -88,14 +88,16 @@ CREATE TABLE market_price_history (
     low DECIMAL NOT NULL,
     close DECIMAL NOT NULL,
     volume DECIMAL NOT NULL,
-    resolution VARCHAR(10) NOT NULL DEFAULT '15'
+    resolution VARCHAR(10) NOT NULL DEFAULT '15',
+    PRIMARY KEY (market_id, time, resolution)
 ) PARTITION BY RANGE (time);
 
 -- Create initial partitions for current month (November 2025) and next month (December 2025)
+-- Using explicit UTC timestamps to avoid timezone issues
 CREATE TABLE market_price_history_y2025m11 PARTITION OF market_price_history
-    FOR VALUES FROM ('2025-11-01') TO ('2025-12-01');
+    FOR VALUES FROM ('2025-11-01 00:00:00+00') TO ('2025-12-01 00:00:00+00');
 CREATE TABLE market_price_history_y2025m12 PARTITION OF market_price_history
-    FOR VALUES FROM ('2025-12-01') TO ('2026-01-01');
+    FOR VALUES FROM ('2025-12-01 00:00:00+00') TO ('2026-01-01 00:00:00+00');
 
 -- Index on partitioned table (applies to all partitions)
 CREATE INDEX idx_market_price_history_market_time_resolution ON market_price_history(market_id, time DESC, resolution);
@@ -255,9 +257,16 @@ BEGIN
     -- Ensure partition exists
     PERFORM ensure_market_price_history_partition(p_time);
     
-    -- Insert the data
+    -- Insert the data with conflict resolution
+    -- If a bar already exists for this market_id, time, and resolution, update it
     INSERT INTO market_price_history (time, market_id, open, high, low, close, volume, resolution)
-    VALUES (p_time, p_market_id, p_open, p_high, p_low, p_close, p_volume, p_resolution);
+    VALUES (p_time, p_market_id, p_open, p_high, p_low, p_close, p_volume, p_resolution)
+    ON CONFLICT (market_id, time, resolution) DO UPDATE SET
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        volume = EXCLUDED.volume;
 END;
 $$ LANGUAGE plpgsql;
 
