@@ -252,42 +252,8 @@ func (s *MarketStreamService) RunStream() {
 			}
 		}
 
-		// Extract mid-price and aggregate OHLCV
-		midPrice := ExtractMidPrice(bids, asks)
-		if midPrice > 0 {
-			// Parse timestamp (assuming it's in milliseconds)
-			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
-			if err == nil {
-				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
-				if err := s.ohlcvAggregator.UpdatePrice(bookMsg.Market, midPrice, timestamp); err != nil {
-					s.logger.Error("failed to update OHLCV", "error", err, "market", bookMsg.Market)
-				}
-			} else {
-				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
-			}
-		} else {
-			s.logger.Debug("mid-price is 0, skipping OHLCV update", "market", bookMsg.Market)
-		}
-
-		// Convert to our format
-		data := map[string]interface{}{
-			"event_type": bookMsg.EventType,
-			"asset_id":   bookMsg.AssetID,
-			"market":     bookMsg.Market,
-			"bids":       bids,
-			"asks":       asks,
-			"timestamp":  bookMsg.Timestamp,
-			"hash":       bookMsg.Hash,
-		}
-
-		payload, err := json.Marshal(data)
-		if err != nil {
-			s.logger.Error("failed to marshal order book data", "error", err)
-			return err
-		}
-
-		// Map asset ID to condition ID for Redis channel
-		// The frontend subscribes using condition IDs, so we need to publish to channels using condition IDs
+		// Map asset ID to condition ID FIRST (before OHLCV aggregation)
+		// The frontend subscribes using condition IDs, and we need to use condition IDs for OHLCV storage too
 		conditionID := bookMsg.Market // Default to bookMsg.Market (might already be condition ID)
 		
 		// Try to map asset ID to condition ID
@@ -299,18 +265,45 @@ func (s *MarketStreamService) RunStream() {
 			conditionID = mappedConditionID
 			s.logger.Debug("mapped market field to condition ID", "market", bookMsg.Market, "condition_id", conditionID)
 		} else {
-			// If no mapping found, log a warning but still publish (bookMsg.Market might already be condition ID)
+			// If no mapping found, log a warning but still use as-is (bookMsg.Market might already be condition ID)
 			s.logger.Debug("no mapping found for asset/market ID, using as-is", 
 				"asset_id", bookMsg.AssetID, 
 				"market", bookMsg.Market,
 				"using_as_condition_id", conditionID)
 		}
-		
-		// Update the market field in the data to use condition ID
-		data["market"] = conditionID
-		payload, err = json.Marshal(data)
+
+		// Extract mid-price and aggregate OHLCV using condition ID
+		midPrice := ExtractMidPrice(bids, asks)
+		if midPrice > 0 {
+			// Parse timestamp (assuming it's in milliseconds)
+			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
+			if err == nil {
+				timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000)
+				// Use conditionID for OHLCV aggregation to ensure bars are stored under the correct market ID
+				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, timestamp); err != nil {
+					s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID)
+				}
+			} else {
+				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
+			}
+		} else {
+			s.logger.Debug("mid-price is 0, skipping OHLCV update", "condition_id", conditionID)
+		}
+
+		// Convert to our format
+		data := map[string]interface{}{
+			"event_type": bookMsg.EventType,
+			"asset_id":   bookMsg.AssetID,
+			"market":     conditionID, // Use condition ID for the market field
+			"bids":       bids,
+			"asks":       asks,
+			"timestamp":  bookMsg.Timestamp,
+			"hash":       bookMsg.Hash,
+		}
+
+		payload, err := json.Marshal(data)
 		if err != nil {
-			s.logger.Error("failed to marshal order book data after condition ID mapping", "error", err)
+			s.logger.Error("failed to marshal order book data", "error", err)
 			return err
 		}
 		

@@ -31,7 +31,9 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -113,6 +115,7 @@ func (h *Hub) Run() {
 			h.logger.Info("📨 hub: received subscription request", 
 				"market_id", sub.marketID, 
 				"market_id_length", len(sub.marketID),
+				"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
 				"market_id_bytes", []byte(sub.marketID),
 				"client_addr", sub.client.Conn.RemoteAddr())
 			if _, ok := h.subscriptions[sub.marketID]; !ok {
@@ -120,15 +123,25 @@ func (h *Hub) Run() {
 				// First client for this market, so we subscribe to the Redis channel.
 				h.logger.Info("🆕 hub: first subscription to market, starting Redis listener", 
 					"market_id", sub.marketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
 					"redis_channel", "market:"+sub.marketID)
 				go h.listenToMarket(sub.marketID)
 			}
 			h.subscriptions[sub.marketID][sub.client] = true
-			h.logger.Info("✅ hub: client subscribed to market", 
-				"market_id", sub.marketID, 
-				"client", sub.client.Conn.RemoteAddr(), 
-				"total_clients_for_market", len(h.subscriptions[sub.marketID]), 
-				"all_subscriptions", len(h.subscriptions))
+			// Verify the subscription was stored correctly
+			if storedMarket, ok := h.subscriptions[sub.marketID]; ok {
+				h.logger.Info("✅ hub: client subscribed to market", 
+					"market_id", sub.marketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)),
+					"client", sub.client.Conn.RemoteAddr(), 
+					"total_clients_for_market", len(storedMarket), 
+					"all_subscriptions", len(h.subscriptions),
+					"subscription_verified", true)
+			} else {
+				h.logger.Error("❌ hub: subscription NOT found after storing!", 
+					"market_id", sub.marketID,
+					"market_id_hex", fmt.Sprintf("%x", []byte(sub.marketID)))
+			}
 		case sub := <-h.Unsubscribe:
 			if market, ok := h.subscriptions[sub.marketID]; ok {
 				delete(market, sub.client)
@@ -192,12 +205,29 @@ func (h *Hub) listenToMarket(marketID string) {
 }
 
 // broadcastToMarket sends a message to all clients subscribed to a specific market.
+var broadcastCallCount int64
+
 func (h *Hub) broadcastToMarket(marketID string, message []byte) {
+	// Log the exact marketID being used for lookup
+	callCount := atomic.AddInt64(&broadcastCallCount, 1)
+	if callCount <= 5 {
+		h.logger.Info("🔍 hub: broadcastToMarket called", 
+			"market_id", marketID,
+			"market_id_length", len(marketID),
+			"market_id_hex", fmt.Sprintf("%x", []byte(marketID)),
+			"subscriptions_map_size", len(h.subscriptions),
+			"call_count", callCount)
+	}
+	
 	if market, ok := h.subscriptions[marketID]; ok {
 		if len(market) > 0 {
 			// Log first few broadcasts to verify messages are being sent
-			if len(market) > 0 {
-				h.logger.Info("hub: broadcasting to clients", "market_id", marketID, "num_clients", len(market), "message_size", len(message))
+			if callCount <= 5 {
+				h.logger.Info("✅ hub: found subscription, broadcasting", 
+					"market_id", marketID, 
+					"num_clients", len(market), 
+					"message_size", len(message),
+					"call_count", callCount)
 			}
 		}
 		for client := range market {
@@ -217,14 +247,18 @@ func (h *Hub) broadcastToMarket(marketID string, message []byte) {
 	} else {
 		// Log all subscribed market IDs to help debug mismatches
 		subscribedMarkets := make([]string, 0, len(h.subscriptions))
+		subscribedMarketsHex := make([]string, 0, len(h.subscriptions))
 		for mID := range h.subscriptions {
 			subscribedMarkets = append(subscribedMarkets, mID)
+			subscribedMarketsHex = append(subscribedMarketsHex, fmt.Sprintf("%x", []byte(mID)))
 		}
-		h.logger.Warn("hub: no clients subscribed to market", 
+		h.logger.Warn("❌ hub: no clients subscribed to market", 
 			"market_id", marketID, 
 			"market_id_length", len(marketID),
+			"market_id_hex", fmt.Sprintf("%x", []byte(marketID)),
 			"available_markets", len(h.subscriptions),
-			"subscribed_markets", subscribedMarkets)
+			"subscribed_markets", subscribedMarkets,
+			"subscribed_markets_hex", subscribedMarketsHex)
 	}
 }
 

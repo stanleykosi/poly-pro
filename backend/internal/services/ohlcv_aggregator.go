@@ -70,6 +70,9 @@ func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Queri
 	// Start periodic status logging
 	go agg.periodicStatusLog()
 	
+	// Start periodic flush of completed bars
+	go agg.periodicFlush()
+	
 	return agg
 }
 
@@ -367,5 +370,100 @@ func (a *OHLCVAggregator) logStatus() {
 		"markets", len(a.bars),
 		"active_bars", totalBars,
 		"by_resolution", barCounts)
+}
+
+// periodicFlush periodically checks for completed bars and saves them to the database.
+// This ensures bars are saved even if no new price updates arrive after a time period ends.
+func (a *OHLCVAggregator) periodicFlush() {
+	ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			a.flushCompletedBars()
+		}
+	}
+}
+
+// flushCompletedBars checks all bars in memory and saves any that have completed their time period.
+func (a *OHLCVAggregator) flushCompletedBars() {
+	now := time.Now()
+	var barsToSave []*CurrentBar
+	var barsToRemove []struct {
+		marketID  string
+		resolution string
+	}
+
+	a.mu.Lock()
+	// First pass: identify completed bars
+	for marketID, resolutions := range a.bars {
+		for resolution, bar := range resolutions {
+			// Calculate when this bar's time period ends
+			barEndTime := a.getBarEndTime(bar.StartTime, bar.Resolution)
+			
+			// If the current time is past the bar's end time, it's completed
+			if now.After(barEndTime) || now.Equal(barEndTime) {
+				barsToSave = append(barsToSave, bar)
+				barsToRemove = append(barsToRemove, struct {
+					marketID   string
+					resolution string
+				}{marketID: marketID, resolution: resolution})
+			}
+		}
+	}
+	a.mu.Unlock()
+
+	// Second pass: save completed bars (outside the lock to avoid holding it during DB operations)
+	if len(barsToSave) > 0 {
+		a.logger.Info("💾 flushing completed bars", "count", len(barsToSave))
+		for _, bar := range barsToSave {
+			if err := a.saveBar(bar); err != nil {
+				a.logger.Error("failed to flush completed bar", 
+					"error", err, 
+					"market_id", bar.MarketID, 
+					"resolution", bar.Resolution,
+					"start_time", bar.StartTime)
+			} else {
+				a.logger.Debug("flushed completed bar",
+					"market_id", bar.MarketID,
+					"resolution", bar.Resolution,
+					"start_time", bar.StartTime)
+			}
+		}
+
+		// Third pass: remove saved bars from memory
+		a.mu.Lock()
+		for _, toRemove := range barsToRemove {
+			if resolutions, ok := a.bars[toRemove.marketID]; ok {
+				delete(resolutions, toRemove.resolution)
+				// If no more bars for this market, remove the market entry
+				if len(resolutions) == 0 {
+					delete(a.bars, toRemove.marketID)
+				}
+			}
+		}
+		a.mu.Unlock()
+	}
+}
+
+// getBarEndTime calculates when a bar's time period ends based on its start time and resolution.
+func (a *OHLCVAggregator) getBarEndTime(startTime time.Time, resolution string) time.Time {
+	switch resolution {
+	case "1": // 1 minute
+		return startTime.Add(1 * time.Minute)
+	case "5": // 5 minutes
+		return startTime.Add(5 * time.Minute)
+	case "15": // 15 minutes
+		return startTime.Add(15 * time.Minute)
+	case "60": // 1 hour
+		return startTime.Add(1 * time.Hour)
+	case "D": // 1 day
+		return startTime.Add(24 * time.Hour)
+	default:
+		return startTime.Add(1 * time.Hour)
+	}
 }
 
