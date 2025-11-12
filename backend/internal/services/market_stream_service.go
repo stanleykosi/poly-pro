@@ -197,12 +197,12 @@ func (s *MarketStreamService) RunStream() {
 				assetIDs = append(assetIDs, tokenIDs...)
 			}
 		}
-		s.logger.Info("✅ extracted token IDs from Gamma API markets", 
-			"market_count", len(markets),
-			"markets_with_tokens", marketsWithTokens,
-			"markets_without_tokens", marketsWithoutTokens,
-			"total_token_ids", len(assetIDs),
-			"mapping_size", len(assetIDToConditionID))
+	s.logger.Info("✅ extracted token IDs from Gamma API markets", 
+		"market_count", len(markets),
+		"markets_with_tokens", marketsWithTokens,
+		"markets_without_tokens", marketsWithoutTokens,
+		"total_token_ids", len(assetIDs),
+		"mapping_size", len(assetIDToConditionID))
 	} else {
 		s.logger.Error("Gamma client not available - cannot fetch markets")
 		return
@@ -213,6 +213,7 @@ func (s *MarketStreamService) RunStream() {
 		return
 	}
 
+	s.logger.Info("📡 proceeding to WebSocket subscription", "asset_count", len(assetIDs), "unique_markets", len(assetIDToConditionID))
 	s.logger.Info("📡 subscribing to WebSocket channels", "asset_count", len(assetIDs))
 	if err := s.wsClient.Subscribe(assetIDs); err != nil {
 		s.logger.Error("❌ failed to subscribe to WebSocket channels", "error", err)
