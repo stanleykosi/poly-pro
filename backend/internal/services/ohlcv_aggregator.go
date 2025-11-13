@@ -250,6 +250,18 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	if err := timeVal.Scan(utcTime); err != nil {
 		return err
 	}
+	
+	// Log the exact pgtype.Timestamptz value being sent to the database
+	// This helps debug timezone issues
+	a.logger.Info("🔍 timestamp conversion details",
+		"original_time", bar.StartTime.Format(time.RFC3339),
+		"utc_time", utcTime.Format(time.RFC3339),
+		"utc_time_unix", utcTime.Unix(),
+		"pgtype_valid", timeVal.Valid,
+		"pgtype_time", timeVal.Time.Format(time.RFC3339),
+		"pgtype_time_unix", timeVal.Time.Unix(),
+		"pgtype_infinity", timeVal.InfinityModifier,
+		"pgtype_time_utc", timeVal.Time.UTC().Format(time.RFC3339))
 
 	// Helper function to convert float64 to pgtype.Numeric
 	// pgtype.Numeric.Scan() doesn't accept float64 directly, so we convert to string first
@@ -362,11 +374,39 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 			"start_time_rfc3339", utcTime.Format(time.RFC3339),
 			"this_indicates_a_database_issue")
 	} else {
-		// Successfully verified
-		a.logger.Debug("verified insert in database",
-			"market_id", bar.MarketID,
-			"resolution", bar.Resolution,
-			"start_time", bar.StartTime)
+		// Successfully verified - log what was actually stored in the database
+		storedTime := verifyResults[0].Time
+		if storedTime.Valid {
+			storedTimeUTC := storedTime.Time.UTC()
+			storedDate := storedTimeUTC.Format("2006-01-02")
+			sentDate := utcTime.Format("2006-01-02")
+			datesMatch := storedDate == sentDate
+			
+			a.logger.Info("✅ verified insert - comparing stored vs sent",
+				"market_id", bar.MarketID,
+				"resolution", bar.Resolution,
+				"sent_time_utc", utcTime.Format(time.RFC3339),
+				"sent_time_date", sentDate,
+				"stored_time_utc", storedTimeUTC.Format(time.RFC3339),
+				"stored_time_date", storedDate,
+				"stored_time_unix", storedTimeUTC.Unix(),
+				"dates_match", datesMatch,
+				"time_diff", storedTimeUTC.Sub(utcTime))
+			
+			if !datesMatch {
+				a.logger.Error("❌ DATE MISMATCH: stored date differs from sent date",
+					"sent_date", sentDate,
+					"stored_date", storedDate,
+					"sent_time", utcTime.Format(time.RFC3339),
+					"stored_time", storedTimeUTC.Format(time.RFC3339),
+					"market_id", bar.MarketID,
+					"resolution", bar.Resolution)
+			}
+		} else {
+			a.logger.Warn("⚠️  stored timestamp is invalid",
+				"market_id", bar.MarketID,
+				"resolution", bar.Resolution)
+		}
 	}
 
 	a.totalBarsSaved++
