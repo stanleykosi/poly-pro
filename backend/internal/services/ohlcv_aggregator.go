@@ -372,7 +372,7 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 			"resolution", bar.Resolution,
 			"start_time_utc", utcTime,
 			"start_time_rfc3339", utcTime.Format(time.RFC3339),
-			"this_indicates_a_database_issue")
+			"issue", "data_not_found_after_insert")
 	} else {
 		// Successfully verified - log what was actually stored in the database
 		storedTime := verifyResults[0].Time
