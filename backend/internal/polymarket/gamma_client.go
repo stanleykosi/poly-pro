@@ -62,6 +62,11 @@ type GammaMarket struct {
 	Category         string    `json:"category"`
 	AMMType          string    `json:"ammType"`
 	Liquidity        string    `json:"liquidity"`
+	Volume           string    `json:"volume"`           // Total volume
+	VolumeNum        *float64  `json:"volumeNum"`        // Total volume as number (for sorting)
+	Volume24hr       *float64  `json:"volume24hr"`       // 24-hour volume
+	Volume1wk        *float64  `json:"volume1wk"`        // 1-week volume
+	Volume1mo        *float64  `json:"volume1mo"`        // 1-month volume
 	Image            string    `json:"image"`
 	Icon             string    `json:"icon"`
 	Tokens           []Token   `json:"tokens"`
@@ -176,8 +181,11 @@ func (c *GammaAPIClient) GetMarketBySlug(ctx context.Context, slug string) (*Gam
 
 // ListActiveMarkets fetches all active markets from the Gamma API
 // It supports pagination and filtering to get only active (non-closed) markets
+// By default, it orders by volume (descending) to get the top markets by volume
 func (c *GammaAPIClient) ListActiveMarkets(ctx context.Context, limit int, offset int) ([]GammaMarket, error) {
-	apiURL := fmt.Sprintf("%s/markets?closed=false&limit=%d&offset=%d&order=id&ascending=false", 
+	// Order by volumeNum (descending) to get top markets by volume
+	// If volumeNum is not available, fall back to volume field
+	apiURL := fmt.Sprintf("%s/markets?closed=false&limit=%d&offset=%d&order=volumeNum&ascending=false", 
 		c.baseURL, limit, offset)
 
 	c.logger.Info("fetching active markets from Gamma API", "limit", limit, "offset", offset, "url", apiURL)

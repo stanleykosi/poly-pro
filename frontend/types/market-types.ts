@@ -63,6 +63,7 @@ export interface Market {
   slug?: string
   category?: string
   liquidity?: string
+  volume?: string // Total volume for sorting/display
   end_date?: string
 }
 

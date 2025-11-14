@@ -14,6 +14,7 @@ package api
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,7 @@ type MarketListItem struct {
 	Slug             string  `json:"slug"`
 	Category         string  `json:"category"`
 	Liquidity        string  `json:"liquidity"`
+	Volume           string  `json:"volume,omitempty"` // Total volume for sorting/display
 	EndDate          *string `json:"end_date,omitempty"`
 }
 
@@ -145,18 +147,50 @@ func (server *Server) listMarkets(c *gin.Context) {
 	}
 
 	// Convert Gamma API response to our MarketListItem format
-	markets := make([]MarketListItem, 0, len(gammaMarkets))
+	// Store volumeNum for sorting (more reliable than parsing strings)
+	type marketWithVolume struct {
+		MarketListItem
+		volumeNum float64
+	}
+	
+	marketsWithVolume := make([]marketWithVolume, 0, len(gammaMarkets))
 	for _, gammaMarket := range gammaMarkets {
-		markets = append(markets, MarketListItem{
-			ID:               gammaMarket.ConditionID,
-			Title:            gammaMarket.Question,
-			Description:      gammaMarket.Question, // Gamma API doesn't have a separate description field
-			ResolutionSource: gammaMarket.ResolutionSource,
-			Slug:             gammaMarket.Slug,
-			Category:         gammaMarket.Category,
-			Liquidity:        gammaMarket.Liquidity,
-			EndDate:          gammaMarket.EndDate,
+		volNum := 0.0
+		if gammaMarket.VolumeNum != nil {
+			volNum = *gammaMarket.VolumeNum
+		} else if gammaMarket.Volume != "" {
+			// Fallback to parsing volume string if volumeNum is not available
+			if parsed, err := strconv.ParseFloat(gammaMarket.Volume, 64); err == nil {
+				volNum = parsed
+			}
+		}
+		
+		marketsWithVolume = append(marketsWithVolume, marketWithVolume{
+			MarketListItem: MarketListItem{
+				ID:               gammaMarket.ConditionID,
+				Title:            gammaMarket.Question,
+				Description:      gammaMarket.Question, // Gamma API doesn't have a separate description field
+				ResolutionSource: gammaMarket.ResolutionSource,
+				Slug:             gammaMarket.Slug,
+				Category:         gammaMarket.Category,
+				Liquidity:        gammaMarket.Liquidity,
+				Volume:           gammaMarket.Volume, // Include volume for display
+				EndDate:          gammaMarket.EndDate,
+			},
+			volumeNum: volNum,
 		})
+	}
+
+	// Sort by volume (descending) to ensure top markets by volume
+	// This ensures we always return top markets by volume even if API doesn't support volume ordering
+	sort.Slice(marketsWithVolume, func(i, j int) bool {
+		return marketsWithVolume[i].volumeNum > marketsWithVolume[j].volumeNum
+	})
+
+	// Extract MarketListItem from sorted slice
+	markets := make([]MarketListItem, 0, len(marketsWithVolume))
+	for _, m := range marketsWithVolume {
+		markets = append(markets, m.MarketListItem)
 	}
 
 	server.logger.Info("successfully fetched markets", "count", len(markets))

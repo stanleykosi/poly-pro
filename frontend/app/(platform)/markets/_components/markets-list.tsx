@@ -45,6 +45,30 @@ export default function MarketsList() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Group markets by category - MUST be called before any early returns to follow Rules of Hooks
+  const { groupedMarkets, categories } = useMemo(() => {
+    const grouped: Record<string, Market[]> = {}
+    const cats: string[] = []
+
+    markets.forEach((market) => {
+      const category = market.category || 'Uncategorized'
+      if (!grouped[category]) {
+        grouped[category] = []
+        cats.push(category)
+      }
+      grouped[category].push(market)
+    })
+
+    // Sort categories alphabetically, but put "Uncategorized" last
+    cats.sort((a, b) => {
+      if (a === 'Uncategorized') return 1
+      if (b === 'Uncategorized') return -1
+      return a.localeCompare(b)
+    })
+
+    return { groupedMarkets: grouped, categories: cats }
+  }, [markets])
+
   useEffect(() => {
     const fetchMarkets = async () => {
       try {
@@ -91,60 +115,6 @@ export default function MarketsList() {
     fetchMarkets()
   }, [])
 
-  if (isLoading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Loading Markets...</CardTitle>
-          <CardDescription>Fetching available markets from the API.</CardDescription>
-        </CardHeader>
-      </Card>
-    )
-  }
-
-  if (error) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Error Loading Markets</CardTitle>
-          <CardDescription>{error}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => window.location.reload()}
-            className="text-primary hover:underline"
-          >
-            Try again
-          </button>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  // Group markets by category
-  const { groupedMarkets, categories } = useMemo(() => {
-    const grouped: Record<string, Market[]> = {}
-    const cats: string[] = []
-
-    markets.forEach((market) => {
-      const category = market.category || 'Uncategorized'
-      if (!grouped[category]) {
-        grouped[category] = []
-        cats.push(category)
-      }
-      grouped[category].push(market)
-    })
-
-    // Sort categories alphabetically, but put "Uncategorized" last
-    cats.sort((a, b) => {
-      if (a === 'Uncategorized') return 1
-      if (b === 'Uncategorized') return -1
-      return a.localeCompare(b)
-    })
-
-    return { groupedMarkets: grouped, categories: cats }
-  }, [markets])
-
   const renderMarketCard = (market: Market) => {
     const marketSlug = market.slug || market.id
     const marketUrl = `/markets/${marketSlug}`
@@ -184,6 +154,36 @@ export default function MarketsList() {
           </CardContent>
         </Card>
       </Link>
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Loading Markets...</CardTitle>
+          <CardDescription>Fetching available markets from the API.</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Error Loading Markets</CardTitle>
+          <CardDescription>{error}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <button
+            onClick={() => window.location.reload()}
+            className="text-primary hover:underline"
+          >
+            Try again
+          </button>
+        </CardContent>
+      </Card>
     )
   }
 
