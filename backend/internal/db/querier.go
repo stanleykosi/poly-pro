@@ -11,6 +11,9 @@ import (
 )
 
 type Querier interface {
+	// @description Creates a new order in the database with status 'pending'.
+	// This is called when an order is first placed, before it's submitted to Polymarket.
+	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
 	// @description Creates a new user in the database.
 	// This is typically called after a 'user.created' webhook event from Clerk.
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -26,6 +29,14 @@ type Querier interface {
 	// @param to_time The end time (inclusive) for the query.
 	// @param resolution The resolution/interval (e.g., '1', '5', '15', '60', 'D').
 	GetMarketPriceHistory(ctx context.Context, arg GetMarketPriceHistoryParams) ([]MarketPriceHistory, error)
+	// @description Retrieves a single order by its ID.
+	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
+	// @description Retrieves all orders for a specific market.
+	GetOrdersByMarketID(ctx context.Context, marketID string) ([]Order, error)
+	// @description Retrieves all orders for a specific user, ordered by creation date (newest first).
+	GetOrdersByUserID(ctx context.Context, userID pgtype.UUID) ([]Order, error)
+	// @description Retrieves orders for a specific user filtered by status.
+	GetOrdersByUserIDAndStatus(ctx context.Context, arg GetOrdersByUserIDAndStatusParams) ([]Order, error)
 	// @description Retrieves a single user from the database based on their unique Clerk User ID.
 	// This will be used frequently in authentication middleware to identify the requesting user.
 	GetUserByClerkID(ctx context.Context, clerkUserID string) (User, error)
@@ -40,6 +51,11 @@ type Querier interface {
 	// @param volume The trading volume.
 	// @param resolution The resolution/interval (e.g., '1', '5', '15', '60', 'D').
 	InsertMarketPriceHistory(ctx context.Context, arg InsertMarketPriceHistoryParams) error
+	// @description Updates the Polymarket order ID after the order is submitted to Polymarket.
+	UpdateOrderPolymarketID(ctx context.Context, arg UpdateOrderPolymarketIDParams) (Order, error)
+	// @description Updates the status of an order and sets the appropriate timestamp.
+	// Status can be: 'pending', 'open', 'filled', 'cancelled', 'rejected'
+	UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) (Order, error)
 }
 
 var _ Querier = (*Queries)(nil)

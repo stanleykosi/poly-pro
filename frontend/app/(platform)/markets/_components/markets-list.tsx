@@ -18,7 +18,7 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
 import { Market } from '@/types'
 import {
@@ -28,6 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 
 interface MarketsApiResponse {
   status: 'success'
@@ -120,6 +121,72 @@ export default function MarketsList() {
     )
   }
 
+  // Group markets by category
+  const { groupedMarkets, categories } = useMemo(() => {
+    const grouped: Record<string, Market[]> = {}
+    const cats: string[] = []
+
+    markets.forEach((market) => {
+      const category = market.category || 'Uncategorized'
+      if (!grouped[category]) {
+        grouped[category] = []
+        cats.push(category)
+      }
+      grouped[category].push(market)
+    })
+
+    // Sort categories alphabetically, but put "Uncategorized" last
+    cats.sort((a, b) => {
+      if (a === 'Uncategorized') return 1
+      if (b === 'Uncategorized') return -1
+      return a.localeCompare(b)
+    })
+
+    return { groupedMarkets: grouped, categories: cats }
+  }, [markets])
+
+  const renderMarketCard = (market: Market) => {
+    const marketSlug = market.slug || market.id
+    const marketUrl = `/markets/${marketSlug}`
+
+    return (
+      <Link key={market.id} href={marketUrl}>
+        <Card className="h-full transition-all hover:shadow-lg hover:border-primary/50 cursor-pointer group">
+          <CardHeader className="pb-3">
+            <CardTitle className="line-clamp-2 text-base group-hover:text-primary transition-colors">
+              {market.title}
+            </CardTitle>
+            {market.category && (
+              <CardDescription className="capitalize text-xs">
+                {market.category}
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="text-sm text-muted-foreground line-clamp-2 mb-4">
+              {market.description}
+            </p>
+            <div className="flex flex-wrap gap-2 text-xs">
+              {market.liquidity && (
+                <span className="px-2.5 py-1 bg-muted rounded-md text-muted-foreground">
+                  💰 ${parseFloat(market.liquidity).toLocaleString(undefined, {
+                    minimumFractionDigits: 0,
+                    maximumFractionDigits: 0,
+                  })}
+                </span>
+              )}
+              {market.end_date && (
+                <span className="px-2.5 py-1 bg-muted rounded-md text-muted-foreground">
+                  📅 {new Date(market.end_date).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </Link>
+    )
+  }
+
   if (markets.length === 0) {
     return (
       <Card>
@@ -134,51 +201,53 @@ export default function MarketsList() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-secondary">
-          Showing {markets.length} active market{markets.length !== 1 ? 's' : ''}
-        </p>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Markets</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            {markets.length} active market{markets.length !== 1 ? 's' : ''}
+          </p>
+        </div>
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {markets.map((market) => {
-          // Use slug if available, otherwise fall back to id
-          const marketSlug = market.slug || market.id
-          const marketUrl = `/markets/${marketSlug}`
 
-          return (
-            <Link key={market.id} href={marketUrl}>
-              <Card className="h-full transition-all hover:shadow-lg hover:border-primary/50 cursor-pointer">
-                <CardHeader>
-                  <CardTitle className="line-clamp-2">{market.title}</CardTitle>
-                  {market.category && (
-                    <CardDescription className="capitalize">
-                      {market.category}
-                    </CardDescription>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-secondary line-clamp-2 mb-4">
-                    {market.description}
-                  </p>
-                  <div className="flex flex-wrap gap-2 text-xs text-secondary">
-                    {market.liquidity && (
-                      <span className="px-2 py-1 bg-muted rounded">
-                        Liquidity: {parseFloat(market.liquidity).toLocaleString()}
-                      </span>
-                    )}
-                    {market.end_date && (
-                      <span className="px-2 py-1 bg-muted rounded">
-                        Ends: {new Date(market.end_date).toLocaleDateString()}
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          )
-        })}
-      </div>
+      {categories.length > 1 ? (
+        <Tabs defaultValue={categories[0]} className="w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 h-auto">
+            {categories.slice(0, 5).map((category) => (
+              <TabsTrigger
+                key={category}
+                value={category}
+                className="text-xs capitalize"
+              >
+                {category}
+              </TabsTrigger>
+            ))}
+            {categories.length > 5 && (
+              <TabsTrigger value="all" className="text-xs">
+                All
+              </TabsTrigger>
+            )}
+          </TabsList>
+
+          {categories.slice(0, 5).map((category) => (
+            <TabsContent key={category} value={category} className="mt-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {groupedMarkets[category].map(renderMarketCard)}
+              </div>
+            </TabsContent>
+          ))}
+          <TabsContent value="all" className="mt-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {markets.map(renderMarketCard)}
+            </div>
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {markets.map(renderMarketCard)}
+        </div>
+      )}
     </div>
   )
 }

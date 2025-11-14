@@ -45,20 +45,35 @@ interface MarketState {
 export const useMarketStore = create<MarketState>((set) => ({
   markets: {},
   setOrderBook: (marketId, message) =>
-    set((state) => ({
-      markets: {
-        ...state.markets,
-        [marketId]: {
-          marketId: message.market,
-          assetId: message.asset_id,
-          orderBook: {
-            bids: message.bids,
-            asks: message.asks,
+    set((state) => {
+      // Check if the data actually changed to avoid unnecessary re-renders
+      const existingMarket = state.markets[marketId]
+      const newTimestamp = parseInt(message.timestamp, 10)
+      
+      // If market exists and timestamp hasn't changed, skip update
+      if (
+        existingMarket &&
+        existingMarket.lastUpdate === newTimestamp &&
+        existingMarket.assetId === message.asset_id
+      ) {
+        return state
+      }
+
+      return {
+        markets: {
+          ...state.markets,
+          [marketId]: {
+            marketId: message.market,
+            assetId: message.asset_id,
+            orderBook: {
+              bids: message.bids,
+              asks: message.asks,
+            },
+            // Parse the timestamp string to a number for easier use later.
+            lastUpdate: newTimestamp,
           },
-          // Parse the timestamp string to a number for easier use later.
-          lastUpdate: parseInt(message.timestamp, 10),
         },
-      },
-    })),
+      }
+    }),
 }))
 

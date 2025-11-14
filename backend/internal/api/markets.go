@@ -27,6 +27,7 @@ type MarketDetails struct {
 	Title            string `json:"title"`
 	Description      string `json:"description"`
 	ResolutionSource string `json:"resolution_source"`
+	ClobTokenIds     string `json:"clobTokenIds"`
 }
 
 // MarketListItem represents a simplified market entry for listing pages.
@@ -92,6 +93,7 @@ func (server *Server) getMarketDetails(c *gin.Context) {
 		Title:            gammaMarket.Question,
 		Description:      gammaMarket.Question, // Gamma API doesn't have a separate description field
 		ResolutionSource: gammaMarket.ResolutionSource,
+		ClobTokenIds:     gammaMarket.ClobTokenIds,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "data": marketDetails})

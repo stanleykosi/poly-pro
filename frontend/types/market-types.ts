@@ -59,6 +59,7 @@ export interface Market {
   title: string
   description: string
   resolution_source: string
+  clobTokenIds?: string
   slug?: string
   category?: string
   liquidity?: string

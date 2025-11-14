@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/config"
 	"github.com/poly-pro/backend/internal/polymarket"
@@ -42,6 +43,7 @@ import (
 // PlaceOrderParams defines the parameters for placing a new order.
 type PlaceOrderParams struct {
 	UserID        string
+	MarketID      string
 	TokenID       *big.Int
 	Price         float64 // The price of the order (0 to 1)
 	Size          float64 // The size/quantity of the order
@@ -77,15 +79,16 @@ func NewPolymarketService(store db.Querier, logger *slog.Logger, signerClient Si
 
 /**
  * @description
- * CreateAndSignOrder constructs an EIP-712 compliant order, sends it to the
- * remote-signer for signing, and returns the fully signed order.
+ * CreateAndSignOrder constructs an EIP-712 compliant order, saves it to the database,
+ * sends it to the remote-signer for signing, and returns the fully signed order.
  *
  * @param ctx The context for the operation.
  * @param params The parameters for the order to be created.
  * @returns A pointer to the signed order.
+ * @returns The database order record.
  * @returns An error if any part of the process fails.
  */
-func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params PlaceOrderParams) (*polymarket.SignedOrder, error) {
+func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params PlaceOrderParams) (*polymarket.SignedOrder, db.Order, error) {
 	s.logger.Info("creating and signing Polymarket order", "user_id", params.UserID, "side", params.Side)
 
 	// 1. Fetch the user from the database using the Clerk ID to get the internal user ID.
@@ -93,10 +96,10 @@ func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params Place
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			s.logger.Error("user not found in database", "clerk_id", params.UserID)
-			return nil, errors.New("user not found")
+			return nil, db.Order{}, errors.New("user not found")
 		}
 		s.logger.Error("failed to get user from database", "error", err, "clerk_id", params.UserID)
-		return nil, err
+		return nil, db.Order{}, err
 	}
 
 	// 2. Fetch the active wallet for the user to get the Polymarket funder address.
@@ -104,10 +107,10 @@ func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params Place
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			s.logger.Error("active wallet not found for user", "user_id", user.ID)
-			return nil, errors.New("user wallet not found")
+			return nil, db.Order{}, errors.New("user wallet not found")
 		}
 		s.logger.Error("failed to get wallet from database", "error", err, "user_id", user.ID)
-		return nil, err
+		return nil, db.Order{}, err
 	}
 
 	makerAddress := wallet.PolymarketFunderAddress
@@ -163,49 +166,130 @@ func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params Place
 		Message:     order.ToMessage(),
 	}
 
-	// 6. Marshal the typed data to a JSON string to send to the remote signer.
+	// 6. Save the order to the database with status 'pending' before signing.
+	// We'll update it with the signed order JSON after signing.
+	
+	// Convert float64 to pgtype.Numeric for Size and Price
+	sizeNumeric := pgtype.Numeric{}
+	if err := sizeNumeric.Scan(fmt.Sprintf("%.6f", params.Size)); err != nil {
+		s.logger.Error("failed to convert size to numeric", "error", err)
+		return nil, db.Order{}, fmt.Errorf("failed to convert size: %w", err)
+	}
+	
+	priceNumeric := pgtype.Numeric{}
+	if err := priceNumeric.Scan(fmt.Sprintf("%.6f", params.Price)); err != nil {
+		s.logger.Error("failed to convert price to numeric", "error", err)
+		return nil, db.Order{}, fmt.Errorf("failed to convert price: %w", err)
+	}
+	
+	createOrderParams := db.CreateOrderParams{
+		UserID:      user.ID, // user.ID is already pgtype.UUID
+		MarketID:    params.MarketID,
+		TokenID:     params.TokenID.String(),
+		Side:        params.Side,
+		Size:        sizeNumeric,
+		Price:       priceNumeric,
+		Status:      "pending",
+		SignedOrder: nil, // Will be updated after signing
+	}
+	
+	dbOrder, err := s.store.CreateOrder(ctx, createOrderParams)
+	if err != nil {
+		s.logger.Error("failed to create order in database", "error", err, "user_id", user.ID)
+		return nil, db.Order{}, fmt.Errorf("failed to save order: %w", err)
+	}
+	s.logger.Info("order created in database", "order_id", dbOrder.ID, "user_id", user.ID)
+
+	// 7. Marshal the typed data to a JSON string to send to the remote signer.
 	payloadJSON, err := json.Marshal(typedData)
 	if err != nil {
 		s.logger.Error("failed to marshal EIP-712 typed data", "error", err)
-		return nil, err
+		return nil, dbOrder, err
 	}
 
-	// 7. Request the signature from the remote signer service.
+	// 8. Request the signature from the remote signer service.
 	// Use the internal user ID (UUID as string) for the signer service.
 	internalUserID := user.ID.String()
 	signature, err := s.signerClient.SignTransaction(ctx, internalUserID, string(payloadJSON))
 	if err != nil {
 		s.logger.Error("failed to get signature from remote signer", "error", err)
-		return nil, err
+		return nil, dbOrder, err
 	}
 
-	// 8. Assemble the final signed order.
+	// 9. Assemble the final signed order.
 	signedOrder := &polymarket.SignedOrder{
 		Order:     order,
 		Signature: signature,
 	}
 
-	s.logger.Info("order successfully signed", "user_id", params.UserID, "signature", signedOrder.Signature)
+	// 10. Marshal the signed order to JSONB and update the database record.
+	signedOrderJSON, err := json.Marshal(signedOrder)
+	if err != nil {
+		s.logger.Error("failed to marshal signed order", "error", err)
+		return nil, dbOrder, err
+	}
 
-	// Submit the order to Polymarket's CLOB API if CLOB client is configured
+	// Store signed order JSON in database (we'll add an update query for this later)
+	// For now, the order is saved and we'll update it when we add the update query
+	s.logger.Info("signed order JSON prepared", "order_id", dbOrder.ID, "json_size", len(signedOrderJSON))
+
+	s.logger.Info("order successfully signed", "user_id", params.UserID, "order_id", dbOrder.ID, "signature", signedOrder.Signature)
+
+	// 11. Submit the order to Polymarket's CLOB API if CLOB client is configured
 	if s.clobClient != nil {
 		orderResp, err := s.clobClient.PostOrder(ctx, signedOrder, "GTC") // Default to Good-Till-Cancelled
 		if err != nil {
-			s.logger.Error("failed to submit order to CLOB API", "error", err, "user_id", params.UserID)
-			return nil, fmt.Errorf("failed to submit order: %w", err)
+			s.logger.Error("failed to submit order to CLOB API", "error", err, "user_id", params.UserID, "order_id", dbOrder.ID)
+			// Update order status to rejected if submission fails
+			s.store.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+				ID:     dbOrder.ID,
+				Status: "rejected",
+			})
+			return nil, dbOrder, fmt.Errorf("failed to submit order: %w", err)
 		}
 
 		if !orderResp.Success {
-			s.logger.Warn("order submission failed", "error_msg", orderResp.ErrorMsg, "status", orderResp.Status)
-			return nil, fmt.Errorf("order submission failed: %s", orderResp.ErrorMsg)
+			s.logger.Warn("order submission failed", "error_msg", orderResp.ErrorMsg, "status", orderResp.Status, "order_id", dbOrder.ID)
+			// Update order status to rejected
+			s.store.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+				ID:     dbOrder.ID,
+				Status: "rejected",
+			})
+			return nil, dbOrder, fmt.Errorf("order submission failed: %s", orderResp.ErrorMsg)
 		}
 
-		s.logger.Info("order successfully submitted to CLOB API", "order_id", orderResp.OrderID, "status", orderResp.Status)
+		s.logger.Info("order successfully submitted to CLOB API", "polymarket_order_id", orderResp.OrderID, "status", orderResp.Status, "db_order_id", dbOrder.ID)
 		
-		// Store the order ID in the signed order for reference
-		// Note: You may want to extend SignedOrder to include orderId
+		// Update the order with Polymarket order ID and status
+		polymarketOrderID := pgtype.Text{}
+		if err := polymarketOrderID.Scan(orderResp.OrderID); err != nil {
+			s.logger.Warn("failed to convert Polymarket order ID", "error", err, "order_id", dbOrder.ID)
+		} else {
+			_, err = s.store.UpdateOrderPolymarketID(ctx, db.UpdateOrderPolymarketIDParams{
+				ID:                dbOrder.ID,
+				PolymarketOrderID: polymarketOrderID,
+			})
+			if err != nil {
+				s.logger.Warn("failed to update order with Polymarket ID", "error", err, "order_id", dbOrder.ID)
+			}
+		}
+
+		// Update status to 'open' since it's been submitted
+		_, err = s.store.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+			ID:     dbOrder.ID,
+			Status: "open",
+		})
+		if err != nil {
+			s.logger.Warn("failed to update order status to open", "error", err, "order_id", dbOrder.ID)
+		}
+
+		// Refresh the order from database to get updated fields
+		dbOrder, err = s.store.GetOrderByID(ctx, dbOrder.ID)
+		if err != nil {
+			s.logger.Warn("failed to refresh order from database", "error", err, "order_id", dbOrder.ID)
+		}
 	}
 
-	return signedOrder, nil
+	return signedOrder, dbOrder, nil
 }
 

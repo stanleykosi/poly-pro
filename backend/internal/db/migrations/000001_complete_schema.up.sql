@@ -75,11 +75,36 @@ CREATE TABLE wallets (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Table: orders
+-- Records all placed orders (pending, filled, cancelled) for tracking and order management.
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    market_id VARCHAR(255) NOT NULL,
+    token_id VARCHAR(255) NOT NULL,
+    polymarket_order_id VARCHAR(255) UNIQUE, -- From Polymarket API response after submission
+    side VARCHAR(4) NOT NULL CHECK (side IN ('BUY', 'SELL')),
+    size DECIMAL NOT NULL,
+    price DECIMAL NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'open', 'filled', 'cancelled', 'rejected')),
+    signed_order JSONB, -- Store the full signed order JSON for reference
+    submitted_at TIMESTAMPTZ, -- When order was submitted to Polymarket
+    filled_at TIMESTAMPTZ, -- When order was filled (if applicable)
+    cancelled_at TIMESTAMPTZ, -- When order was cancelled (if applicable)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+CREATE INDEX idx_orders_market_id ON orders(market_id);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
+
 -- Table: trades
 -- Records every trade executed by a user, providing a complete history for portfolio tracking.
 CREATE TABLE trades (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    order_id UUID REFERENCES orders(id) ON DELETE SET NULL, -- Link to the order that resulted in this trade
     market_id VARCHAR(255) NOT NULL,
     polymarket_trade_id VARCHAR(255) UNIQUE, -- From Polymarket API response
     side VARCHAR(4) NOT NULL CHECK (side IN ('BUY', 'SELL')),
@@ -88,6 +113,7 @@ CREATE TABLE trades (
     executed_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX idx_trades_order_id ON trades(order_id);
 
 -- Table: market_price_history (Native PostgreSQL Partitioned Table)
 -- Stores time-series price data for market charts. Optimized for fast time-based queries.

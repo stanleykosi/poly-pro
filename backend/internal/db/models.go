@@ -72,9 +72,28 @@ type NewsEvent struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Order struct {
+	ID                pgtype.UUID        `json:"id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	MarketID          string             `json:"market_id"`
+	TokenID           string             `json:"token_id"`
+	PolymarketOrderID pgtype.Text        `json:"polymarket_order_id"`
+	Side              string             `json:"side"`
+	Size              pgtype.Numeric     `json:"size"`
+	Price             pgtype.Numeric     `json:"price"`
+	Status            string             `json:"status"`
+	SignedOrder       []byte             `json:"signed_order"`
+	SubmittedAt       pgtype.Timestamptz `json:"submitted_at"`
+	FilledAt          pgtype.Timestamptz `json:"filled_at"`
+	CancelledAt       pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Trade struct {
 	ID                pgtype.UUID        `json:"id"`
 	UserID            pgtype.UUID        `json:"user_id"`
+	OrderID           pgtype.UUID        `json:"order_id"`
 	MarketID          string             `json:"market_id"`
 	PolymarketTradeID pgtype.Text        `json:"polymarket_trade_id"`
 	Side              string             `json:"side"`

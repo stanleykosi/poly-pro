@@ -40,13 +40,23 @@ const subscriptions = new Map<
   }
 >()
 
-// Listen to the Zustand store for any changes
-useMarketStore.subscribe((state, prevState) => {
-  subscriptions.forEach((sub) => {
-    const prevMarketData = prevState.markets[sub.marketId]
-    const newMarketData = state.markets[sub.marketId]
+// Store subscription cleanup function
+let storeSubscriptionCleanup: (() => void) | null = null
 
-    if (newMarketData && newMarketData !== prevMarketData) {
+// Initialize store subscription only once
+function initializeStoreSubscription() {
+  if (storeSubscriptionCleanup) {
+    return // Already initialized
+  }
+
+  // Listen to the Zustand store for any changes
+  storeSubscriptionCleanup = useMarketStore.subscribe((state, prevState) => {
+    subscriptions.forEach((sub) => {
+      const prevMarketData = prevState.markets[sub.marketId]
+      const newMarketData = state.markets[sub.marketId]
+
+      // Only update if the data actually changed (reference equality check)
+      if (newMarketData && newMarketData !== prevMarketData) {
       console.log('[Chart Datafeed] Store update received for market:', sub.marketId, {
         has_bids: newMarketData.orderBook.bids?.length > 0,
         has_asks: newMarketData.orderBook.asks?.length > 0,
@@ -123,7 +133,10 @@ useMarketStore.subscribe((state, prevState) => {
       }
     }
   })
-})
+  })
+}
+
+// Note: Subscription will be initialized lazily when subscribeToRealtimeUpdates is called
 
 /**
  * @function fetchHistoricalData
@@ -225,6 +238,11 @@ export function subscribeToRealtimeUpdates(
   series: ISeriesApi<'Candlestick' | 'Line' | 'Area' | 'Histogram'>,
   lastBar: BarData | null
 ): string {
+  // Initialize store subscription if not already done (only in browser)
+  if (typeof window !== 'undefined') {
+    initializeStoreSubscription()
+  }
+  
   // Check if there's already an active subscription for this market
   // In React Strict Mode, the series object might be a new instance, so we check by marketId only
   for (const [id, sub] of subscriptions.entries()) {
@@ -268,5 +286,11 @@ export function unsubscribeFromRealtimeUpdates(marketId: string): void {
       subscriptions.delete(id)
     }
   })
+  
+  // Clean up store subscription if no more subscriptions exist
+  if (subscriptions.size === 0 && storeSubscriptionCleanup) {
+    storeSubscriptionCleanup()
+    storeSubscriptionCleanup = null
+  }
 }
 

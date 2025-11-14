@@ -28,10 +28,11 @@ import (
 // placeOrderRequest defines the structure of the JSON body expected
 // for a request to the `POST /api/v1/orders` endpoint.
 type placeOrderRequest struct {
-	TokenID string  `json:"tokenId" binding:"required"`
-	Price   float64 `json:"price" binding:"required,gt=0,lt=1"`
-	Size    float64 `json:"size" binding:"required,gt=0"`
-	Side    string  `json:"side" binding:"required,oneof=BUY SELL"`
+	MarketID string  `json:"marketId" binding:"required"`
+	TokenID  string  `json:"tokenId" binding:"required"`
+	Price    float64 `json:"price" binding:"required,gt=0,lt=1"`
+	Size     float64 `json:"size" binding:"required,gt=0"`
+	Side     string  `json:"side" binding:"required,oneof=BUY SELL"`
 }
 
 /**
@@ -74,6 +75,7 @@ func (server *Server) placeOrder(c *gin.Context) {
 
 	server.logger.Info("processing place order request",
 		"clerk_user_id", clerkUserID,
+		"market_id", req.MarketID,
 		"token_id", req.TokenID,
 		"price", req.Price,
 		"size", req.Size,
@@ -84,6 +86,7 @@ func (server *Server) placeOrder(c *gin.Context) {
 	// For Polymarket proxy wallets (email login), the signature type is 1.
 	params := services.PlaceOrderParams{
 		UserID:        clerkUserID.(string),
+		MarketID:      req.MarketID,
 		TokenID:       tokenID,
 		Price:         req.Price,
 		Size:          req.Size,
@@ -91,7 +94,7 @@ func (server *Server) placeOrder(c *gin.Context) {
 		SignatureType: 1, // POLY_PROXY for email-based accounts
 	}
 
-	signedOrder, err := server.polymarketService.CreateAndSignOrder(c.Request.Context(), params)
+	signedOrder, dbOrder, err := server.polymarketService.CreateAndSignOrder(c.Request.Context(), params)
 	if err != nil {
 		server.logger.Error("failed to create and sign order", "error", err, "user_id", clerkUserID)
 		// Here you could inspect the error to return a more specific status code
@@ -100,14 +103,18 @@ func (server *Server) placeOrder(c *gin.Context) {
 		return
 	}
 
-	// 5. Return the signed order in the response.
-	// In a real implementation, after submitting to Polymarket, we might return the
-	// trade ID or confirmation status.
-	server.logger.Info("order successfully created and signed", "user_id", clerkUserID, slog.Any("signed_order", signedOrder))
+	// 5. Return the signed order and database order in the response.
+	server.logger.Info("order successfully created and signed", 
+		"user_id", clerkUserID, 
+		"order_id", dbOrder.ID,
+		slog.Any("signed_order", signedOrder))
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "success",
-		"message": "Order signed successfully (mock submission)",
-		"data":    signedOrder,
+		"message": "Order placed successfully",
+		"data": gin.H{
+			"order":       dbOrder,
+			"signed_order": signedOrder,
+		},
 	})
 }
 
