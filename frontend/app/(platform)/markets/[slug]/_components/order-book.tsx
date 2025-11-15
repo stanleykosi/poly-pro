@@ -44,15 +44,30 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
   )
 
   // Calculate cumulative sizes for depth visualization - memoized to prevent recalculation
+  // Filter out invalid prices (empty strings, NaN) as a defensive measure
   const { bidsWithCumulative, asksWithCumulative, maxCumulativeSize } = useMemo(() => {
-    const bidsWithCum = bids.reduce((acc, bid) => {
+    // Filter bids with valid prices
+    const validBids = bids.filter((bid) => {
+      const price = parseFloat(bid.price)
+      const size = parseFloat(bid.size)
+      return !isNaN(price) && !isNaN(size) && bid.price !== '' && bid.size !== '' && price > 0 && size > 0
+    })
+
+    // Filter asks with valid prices
+    const validAsks = asks.filter((ask) => {
+      const price = parseFloat(ask.price)
+      const size = parseFloat(ask.size)
+      return !isNaN(price) && !isNaN(size) && ask.price !== '' && ask.size !== '' && price > 0 && size > 0
+    })
+
+    const bidsWithCum = validBids.reduce((acc, bid) => {
       const lastSize = acc.length > 0 ? acc[acc.length - 1].cumulativeSize : 0
       const currentSize = parseFloat(bid.size)
       acc.push({ ...bid, cumulativeSize: lastSize + currentSize })
       return acc
     }, [] as (OrderBookLevel & { cumulativeSize: number })[])
 
-    const asksWithCum = asks.reduce((acc, ask) => {
+    const asksWithCum = validAsks.reduce((acc, ask) => {
       const lastSize = acc.length > 0 ? acc[acc.length - 1].cumulativeSize : 0
       const currentSize = parseFloat(ask.size)
       acc.push({ ...ask, cumulativeSize: lastSize + currentSize })
@@ -123,14 +138,25 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
     )
   }
 
-  // Calculate spread
+  // Calculate spread (only from valid prices)
   const spread = useMemo(() => {
-    if (bids.length > 0 && asks.length > 0) {
-      const bidPrice = parseFloat(bids[0].price)
-      const askPrice = parseFloat(asks[0].price)
-      const spreadValue = askPrice - bidPrice
-      const spreadPercent = ((spreadValue / bidPrice) * 100).toFixed(2)
-      return { value: spreadValue.toFixed(4), percent: spreadPercent }
+    const validBids = bids.filter((bid) => {
+      const price = parseFloat(bid.price)
+      return !isNaN(price) && bid.price !== '' && price > 0
+    })
+    const validAsks = asks.filter((ask) => {
+      const price = parseFloat(ask.price)
+      return !isNaN(price) && ask.price !== '' && price > 0
+    })
+
+    if (validBids.length > 0 && validAsks.length > 0) {
+      const bidPrice = parseFloat(validBids[0].price)
+      const askPrice = parseFloat(validAsks[0].price)
+      if (!isNaN(bidPrice) && !isNaN(askPrice) && bidPrice > 0) {
+        const spreadValue = askPrice - bidPrice
+        const spreadPercent = ((spreadValue / bidPrice) * 100).toFixed(2)
+        return { value: spreadValue.toFixed(4), percent: spreadPercent }
+      }
     }
     return { value: '0.0000', percent: '0.00' }
   }, [bids, asks])
@@ -138,6 +164,9 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
   // Format price as cents (like Polymarket)
   const formatPrice = (priceStr: string) => {
     const price = parseFloat(priceStr)
+    if (isNaN(price) || priceStr === '') {
+      return '0.00'
+    }
     return (price * 100).toFixed(2)
   }
 

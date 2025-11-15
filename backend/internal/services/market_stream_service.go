@@ -236,16 +236,38 @@ func (s *MarketStreamService) RunStream() {
 			s.logger.Info("📊 WebSocket: messages flowing", "total", messageCount)
 		}
 
-		// Convert bids/asks to interface{} for ExtractMidPrice
-		bids := make([]interface{}, len(bookMsg.Bids))
-		for i, bid := range bookMsg.Bids {
+		// Filter out bids/asks with empty or invalid prices before processing
+		// This prevents NaN values from being sent to the frontend
+		validBids := make([]polymarket.OrderLevel, 0, len(bookMsg.Bids))
+		for _, bid := range bookMsg.Bids {
+			if bid.Price != "" && bid.Size != "" {
+				// Validate that price can be parsed as a number
+				if _, err := strconv.ParseFloat(bid.Price, 64); err == nil {
+					validBids = append(validBids, bid)
+				}
+			}
+		}
+		
+		validAsks := make([]polymarket.OrderLevel, 0, len(bookMsg.Asks))
+		for _, ask := range bookMsg.Asks {
+			if ask.Price != "" && ask.Size != "" {
+				// Validate that price can be parsed as a number
+				if _, err := strconv.ParseFloat(ask.Price, 64); err == nil {
+					validAsks = append(validAsks, ask)
+				}
+			}
+		}
+
+		// Convert valid bids/asks to interface{} for ExtractMidPrice
+		bids := make([]interface{}, len(validBids))
+		for i, bid := range validBids {
 			bids[i] = map[string]interface{}{
 				"price": bid.Price,
 				"size":  bid.Size,
 			}
 		}
-		asks := make([]interface{}, len(bookMsg.Asks))
-		for i, ask := range bookMsg.Asks {
+		asks := make([]interface{}, len(validAsks))
+		for i, ask := range validAsks {
 			asks[i] = map[string]interface{}{
 				"price": ask.Price,
 				"size":  ask.Size,
@@ -332,13 +354,29 @@ func (s *MarketStreamService) RunStream() {
 			s.logger.Debug("mid-price is 0, skipping OHLCV update", "condition_id", conditionID)
 		}
 
-		// Convert to our format
+		// Convert valid bids/asks to the format expected by frontend
+		frontendBids := make([]map[string]interface{}, len(validBids))
+		for i, bid := range validBids {
+			frontendBids[i] = map[string]interface{}{
+				"price": bid.Price,
+				"size":  bid.Size,
+			}
+		}
+		frontendAsks := make([]map[string]interface{}, len(validAsks))
+		for i, ask := range validAsks {
+			frontendAsks[i] = map[string]interface{}{
+				"price": ask.Price,
+				"size":  ask.Size,
+			}
+		}
+
+		// Convert to our format (using filtered bids/asks)
 		data := map[string]interface{}{
 			"event_type": bookMsg.EventType,
 			"asset_id":   bookMsg.AssetID,
 			"market":     conditionID, // Use condition ID for the market field
-			"bids":       bids,
-			"asks":       asks,
+			"bids":       frontendBids,
+			"asks":       frontendAsks,
 			"timestamp":  bookMsg.Timestamp,
 			"hash":       bookMsg.Hash,
 		}
