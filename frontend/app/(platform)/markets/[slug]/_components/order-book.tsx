@@ -22,6 +22,7 @@
 
 import { useMemo } from 'react'
 import { useMarketStore } from '@/lib/stores/market-store'
+import { useMarketSubscription } from '@/hooks/use-market-subscription'
 import { cn } from '@/lib/utils'
 import { OrderBookLevel } from '@/types'
 
@@ -34,7 +35,11 @@ interface OrderBookProps {
 const EMPTY_ORDER_BOOK = { bids: [], asks: [] } as const
 
 export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
+  // Ensure we're subscribed to this market's updates
+  useMarketSubscription(marketId)
+  
   // Use a selector that returns the orderBook directly, or undefined
+  // This will trigger re-renders when the order book data changes
   const orderBook = useMarketStore((s) => s.markets[marketId]?.orderBook)
   
   // Use useMemo to ensure stable references

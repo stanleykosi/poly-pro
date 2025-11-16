@@ -55,12 +55,27 @@ function initializeStoreSubscription() {
       const prevMarketData = prevState.markets[sub.marketId]
       const newMarketData = state.markets[sub.marketId]
 
-      // Only update if the data actually changed (reference equality check)
-      if (newMarketData && newMarketData !== prevMarketData) {
+      // Check if market data exists and has actually changed
+      if (!newMarketData) {
+        return
+      }
+
+      // Check if data changed by comparing timestamps and order book content
+      const dataChanged = 
+        !prevMarketData ||
+        prevMarketData.lastUpdate !== newMarketData.lastUpdate ||
+        prevMarketData.assetId !== newMarketData.assetId ||
+        JSON.stringify(prevMarketData.orderBook) !== JSON.stringify(newMarketData.orderBook)
+
+      if (!dataChanged) {
+        return
+      }
+
       console.log('[Chart Datafeed] Store update received for market:', sub.marketId, {
         has_bids: newMarketData.orderBook.bids?.length > 0,
         has_asks: newMarketData.orderBook.asks?.length > 0,
         has_lastBar: !!sub.lastBar,
+        timestamp: newMarketData.lastUpdate,
       })
 
       // Update the last bar with new price from order book
@@ -87,7 +102,7 @@ function initializeStoreSubscription() {
             bids: newMarketData.orderBook.bids,
             asks: newMarketData.orderBook.asks,
           })
-          return
+          return // Skip this iteration of forEach
         }
 
         // Check if this is the first update (bar is empty/initialized with zeros)
@@ -131,8 +146,7 @@ function initializeStoreSubscription() {
       } else {
         console.warn('[Chart Datafeed] No lastBar available for market:', sub.marketId)
       }
-    }
-  })
+    })
   })
 }
 

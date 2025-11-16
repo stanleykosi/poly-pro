@@ -46,19 +46,47 @@ export const useMarketStore = create<MarketState>((set) => ({
   markets: {},
   setOrderBook: (marketId, message) =>
     set((state) => {
-      // Check if the data actually changed to avoid unnecessary re-renders
       const existingMarket = state.markets[marketId]
       const newTimestamp = parseInt(message.timestamp, 10)
       
-      // If market exists and timestamp hasn't changed, skip update
-      if (
-        existingMarket &&
-        existingMarket.lastUpdate === newTimestamp &&
-        existingMarket.assetId === message.asset_id
-      ) {
-        return state
+      // Helper function to check if two order book arrays are different
+      const orderBooksDiffer = (
+        a: { price: string; size: string }[],
+        b: { price: string; size: string }[]
+      ): boolean => {
+        if (a.length !== b.length) return true
+        for (let i = 0; i < a.length; i++) {
+          if (a[i].price !== b[i].price || a[i].size !== b[i].size) {
+            return true
+          }
+        }
+        return false
       }
 
+      // Check if data actually changed - compare bids, asks, and timestamp
+      // Always update if market doesn't exist, or if any data changed
+      if (existingMarket) {
+        const bidsChanged = orderBooksDiffer(
+          existingMarket.orderBook.bids,
+          message.bids || []
+        )
+        const asksChanged = orderBooksDiffer(
+          existingMarket.orderBook.asks,
+          message.asks || []
+        )
+        const timestampChanged = existingMarket.lastUpdate !== newTimestamp
+        const assetIdChanged = existingMarket.assetId !== message.asset_id
+
+        // Only skip update if nothing changed at all
+        // This ensures we always update when there's new data, even if it's empty arrays
+        if (!bidsChanged && !asksChanged && !timestampChanged && !assetIdChanged) {
+          // Data hasn't changed, but we still want to ensure the store reference updates
+          // to trigger re-renders. However, Zustand will handle this automatically.
+          return state
+        }
+      }
+
+      // Always update if market doesn't exist or data changed
       return {
         markets: {
           ...state.markets,
@@ -66,8 +94,8 @@ export const useMarketStore = create<MarketState>((set) => ({
             marketId: message.market,
             assetId: message.asset_id,
             orderBook: {
-              bids: message.bids,
-              asks: message.asks,
+              bids: message.bids || [],
+              asks: message.asks || [],
             },
             // Parse the timestamp string to a number for easier use later.
             lastUpdate: newTimestamp,
