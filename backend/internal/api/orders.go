@@ -97,6 +97,17 @@ func (server *Server) placeOrder(c *gin.Context) {
 	signedOrder, dbOrder, err := server.polymarketService.CreateAndSignOrder(c.Request.Context(), params)
 	if err != nil {
 		server.logger.Error("failed to create and sign order", "error", err, "user_id", clerkUserID)
+		
+		// Return specific error messages for common issues
+		if err.Error() == "user wallet not found" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"status":  "error",
+				"message": "No wallet found. Please create a wallet before placing orders.",
+				"code":    "WALLET_NOT_FOUND",
+			})
+			return
+		}
+		
 		// Here you could inspect the error to return a more specific status code
 		// e.g., if the error is from the signer client, it might be a 503 Service Unavailable.
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to process order"})

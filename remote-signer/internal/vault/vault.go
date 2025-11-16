@@ -27,10 +27,12 @@ import (
 
 // Vault defines the interface for a secret store.
 type Vault interface {
-	// GetPrivateKey retrieves the private key for a given user.
+	// GetPrivateKey retrieves the private key using a secret reference.
+	// The secretRef can be either a user ID (for backward compatibility) or
+	// a secret reference from the wallet's signer_secret_ref field.
 	// In a production system, this would fetch the key from a secure store like
-	// AWS Secrets Manager or HashiCorp Vault using the user's ID as a reference.
-	GetPrivateKey(ctx context.Context, userID string) (string, error)
+	// AWS Secrets Manager or HashiCorp Vault using the secret reference.
+	GetPrivateKey(ctx context.Context, secretRef string) (string, error)
 }
 
 // MockVault is an implementation of the Vault interface for local development.

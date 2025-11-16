@@ -68,38 +68,39 @@ func NewGRPCServer(logger *slog.Logger, v vault.Vault, s *crypto.Signer) *Server
  * @returns An error with an appropriate gRPC status code if the process fails.
  */
 func (s *Server) SignTransaction(ctx context.Context, req *proto.SignRequest) (*proto.SignResponse, error) {
-	s.logger.Info("received sign transaction request", "user_id", req.UserId)
+	// The UserId field now contains either a user ID (legacy) or a secret reference
+	secretRef := req.UserId
+	s.logger.Info("received sign transaction request", "secret_ref", secretRef)
 
 	// 1. Validate the incoming request.
-	if req.UserId == "" {
-		s.logger.Warn("sign request rejected: missing user_id")
-		return nil, status.Error(codes.InvalidArgument, "user_id is required")
+	if secretRef == "" {
+		s.logger.Warn("sign request rejected: missing user_id/secret_ref")
+		return nil, status.Error(codes.InvalidArgument, "user_id/secret_ref is required")
 	}
 	if req.PayloadJson == "" {
-		s.logger.Warn("sign request rejected: missing payload_json", "user_id", req.UserId)
+		s.logger.Warn("sign request rejected: missing payload_json", "secret_ref", secretRef)
 		return nil, status.Error(codes.InvalidArgument, "payload_json is required")
 	}
 
-	// 2. Fetch the private key from the vault.
-	// This is a critical step where a real implementation would securely retrieve
-	// the user-specific key. Our mock vault returns a dummy key.
-	privateKey, err := s.vault.GetPrivateKey(ctx, req.UserId)
+	// 2. Fetch the private key from the vault using the secret reference.
+	// The secretRef can be either a legacy user ID or a wallet's signer_secret_ref.
+	privateKey, err := s.vault.GetPrivateKey(ctx, secretRef)
 	if err != nil {
-		s.logger.Error("failed to get private key from vault", "error", err, "user_id", req.UserId)
+		s.logger.Error("failed to get private key from vault", "error", err, "secret_ref", secretRef)
 		// We return an `Unauthenticated` error because failing to get a key is an auth-level failure.
-		return nil, status.Error(codes.Unauthenticated, "could not retrieve signing key for user")
+		return nil, status.Error(codes.Unauthenticated, "could not retrieve signing key")
 	}
 
 	// 3. Sign the payload using the cryptographic signer.
 	signature, err := s.signer.SignTypedData(privateKey, req.PayloadJson)
 	if err != nil {
-		s.logger.Error("failed to sign typed data", "error", err, "user_id", req.UserId)
+		s.logger.Error("failed to sign typed data", "error", err, "secret_ref", secretRef)
 		// An `Internal` error is appropriate as this indicates a server-side processing failure.
 		return nil, status.Error(codes.Internal, "failed to sign payload")
 	}
 
 	// 4. Return the successful response.
-	s.logger.Info("successfully processed sign transaction request", "user_id", req.UserId)
+	s.logger.Info("successfully processed sign transaction request", "secret_ref", secretRef)
 	return &proto.SignResponse{
 		Signature: signature,
 	}, nil

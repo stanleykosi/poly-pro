@@ -21,9 +21,10 @@
  */
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Market } from '@/types'
 import { useMarketSubscription } from '@/hooks/use-market-subscription'
+import { walletService } from '@/lib/services/wallet-service'
 import {
   Card,
   CardContent,
@@ -34,6 +35,7 @@ import {
 import LightweightChart from '@/app/(platform)/markets/[slug]/_components/lightweight-chart'
 import OrderBook from '@/app/(platform)/markets/[slug]/_components/order-book'
 import PlaceOrderForm from '@/app/(platform)/markets/[slug]/_components/place-order-form'
+import CreateWalletModal from '@/app/(platform)/markets/[slug]/_components/create-wallet-modal'
 
 interface TradingTerminalProps {
   initialMarketData: Market
@@ -47,6 +49,40 @@ export default function TradingTerminal({
 
   // State to link the order book to the order form.
   const [selectedPrice, setSelectedPrice] = useState<string | undefined>()
+  
+  // Wallet management state
+  const [hasWallet, setHasWallet] = useState<boolean | null>(null)
+  const [showWalletModal, setShowWalletModal] = useState(false)
+  const [walletCheckLoading, setWalletCheckLoading] = useState(true)
+
+  // Check if user has a wallet on mount
+  useEffect(() => {
+    const checkWallet = async () => {
+      try {
+        const hasActiveWallet = await walletService.hasActiveWallet()
+        setHasWallet(hasActiveWallet)
+        if (!hasActiveWallet) {
+          setShowWalletModal(true)
+        }
+      } catch (error) {
+        console.error('Failed to check wallet:', error)
+        setHasWallet(false)
+      } finally {
+        setWalletCheckLoading(false)
+      }
+    }
+    checkWallet()
+  }, [])
+
+  const handleWalletCreated = async () => {
+    // Re-check wallet status after creation
+    try {
+      const hasActiveWallet = await walletService.hasActiveWallet()
+      setHasWallet(hasActiveWallet)
+    } catch (error) {
+      console.error('Failed to check wallet after creation:', error)
+    }
+  }
 
   // Parse the clobTokenIds to get the specific token IDs for YES and NO outcomes.
   // Polymarket's `clobTokenIds` is a JSON string array: `["NO_TOKEN_ID", "YES_TOKEN_ID"]`.
@@ -63,7 +99,13 @@ export default function TradingTerminal({
   }
 
   return (
-    <div className="flex h-full flex-col gap-6">
+    <>
+      <CreateWalletModal
+        open={showWalletModal}
+        onOpenChange={setShowWalletModal}
+        onSuccess={handleWalletCreated}
+      />
+      <div className="flex h-full flex-col gap-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">
           {initialMarketData.title}
@@ -131,6 +173,7 @@ export default function TradingTerminal({
         </div>
       </div>
     </div>
+    </>
   )
 }
 

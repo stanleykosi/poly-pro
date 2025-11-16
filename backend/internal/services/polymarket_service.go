@@ -208,9 +208,9 @@ func (s *PolymarketService) CreateAndSignOrder(ctx context.Context, params Place
 	}
 
 	// 8. Request the signature from the remote signer service.
-	// Use the internal user ID (UUID as string) for the signer service.
-	internalUserID := user.ID.String()
-	signature, err := s.signerClient.SignTransaction(ctx, internalUserID, string(payloadJSON))
+	// Use the wallet's secret reference to retrieve the private key from the vault.
+	// The remote signer will use this secret reference to look up the private key.
+	signature, err := s.signerClient.SignTransaction(ctx, wallet.SignerSecretRef, string(payloadJSON))
 	if err != nil {
 		s.logger.Error("failed to get signature from remote signer", "error", err)
 		return nil, dbOrder, err

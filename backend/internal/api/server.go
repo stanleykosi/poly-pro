@@ -36,6 +36,8 @@ type Server struct {
 	Router              *gin.Engine
 	logger              *slog.Logger
 	userService         *services.UserService
+	walletService       *services.WalletService
+	vaultService        services.VaultService
 	polymarketService   *services.PolymarketService
 	marketStreamService *services.MarketStreamService
 	signerClient        services.SignerClient
@@ -71,8 +73,12 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 	// Initialize Gamma API client
 	gammaClient := polymarket.NewGammaAPIClient(config.GammaAPIURL, logger)
 
+	// Initialize vault service for secure private key storage
+	vaultService := services.NewInMemoryVaultService(logger)
+
 	// Initialize services
 	userService := services.NewUserService(store, logger)
+	walletService := services.NewWalletService(store, logger, vaultService)
 	polymarketService := services.NewPolymarketService(store, logger, signerClient, config)
 	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient, config, store, gammaClient)
 
@@ -85,6 +91,8 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		store:               store,
 		logger:              logger,
 		userService:         userService,
+		walletService:       walletService,
+		vaultService:        vaultService,
 		polymarketService:   polymarketService,
 		marketStreamService: marketStreamService,
 		signerClient:        signerClient,
@@ -160,6 +168,13 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		// but could be implemented to require it.
 		v1.GET("/ws", server.serveWs)
 
+		// Vault API route - for remote signer service to retrieve private keys
+		// TODO: Add service-to-service authentication in production
+		vaultGroup := v1.Group("/vault")
+		{
+			vaultGroup.GET("/keys/:secretRef", server.getPrivateKey)
+		}
+
 		// Endpoint to list all active markets. Public data.
 		// This route must be registered BEFORE /markets/:id to avoid route conflicts.
 		v1.GET("/markets", server.listMarkets)
@@ -195,6 +210,15 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 			{
 				// Endpoint to get the current authenticated user's profile.
 				userRoutes.GET("/me", server.getMe)
+			}
+
+			// Wallet-related protected routes
+			walletRoutes := authGroup.Group("/wallets")
+			{
+				// Endpoint to create a new wallet
+				walletRoutes.POST("/", server.createWallet)
+				// Endpoint to get user's wallets
+				walletRoutes.GET("/", server.getWallets)
 			}
 
 			// Order-related protected routes

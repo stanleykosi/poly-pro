@@ -130,6 +130,12 @@ export default function PlaceOrderForm({
       const errorMessage =
         err.response?.data?.message || err.message || 'Failed to place order.'
       setError(errorMessage)
+      
+      // If wallet not found, the parent component should handle showing the wallet modal
+      // We'll just show the error message here
+      if (err.response?.data?.code === 'WALLET_NOT_FOUND') {
+        setError('No wallet found. Please create a wallet to place orders.')
+      }
     } finally {
       setIsLoading(false)
     }
