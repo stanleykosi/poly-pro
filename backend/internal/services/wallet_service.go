@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -38,6 +39,13 @@ type WalletService struct {
 	store        db.Querier
 	logger       *slog.Logger
 	vaultService VaultService
+	userService  UserServiceInterface // Add user service to create users if needed
+}
+
+// UserServiceInterface defines the interface for user operations needed by WalletService
+type UserServiceInterface interface {
+	CreateUser(ctx context.Context, clerkUserID string, email string) (db.User, error)
+	GetUserByClerkID(ctx context.Context, clerkUserID string) (db.User, error)
 }
 
 // VaultService defines the interface for storing and retrieving private keys
@@ -63,11 +71,12 @@ type WalletInfo struct {
 }
 
 // NewWalletService creates a new instance of WalletService
-func NewWalletService(store db.Querier, logger *slog.Logger, vaultService VaultService) *WalletService {
+func NewWalletService(store db.Querier, logger *slog.Logger, vaultService VaultService, userService UserServiceInterface) *WalletService {
 	return &WalletService{
 		store:        store,
 		logger:       logger,
 		vaultService: vaultService,
+		userService:  userService,
 	}
 }
 
@@ -85,13 +94,47 @@ func NewWalletService(store db.Querier, logger *slog.Logger, vaultService VaultS
 func (s *WalletService) CreateWallet(ctx context.Context, params CreateWalletParams) (WalletInfo, error) {
 	s.logger.Info("creating wallet", "user_id", params.UserID)
 
-	// 1. Get the user from the database
+	// 1. Get the user from the database, or create if they don't exist
+	// This handles cases where the user exists in Clerk but the webhook hasn't created them yet
 	user, err := s.store.GetUserByClerkID(ctx, params.UserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return WalletInfo{}, errors.New("user not found")
+			// User doesn't exist - try to create them automatically
+			// Use a placeholder email since we don't have access to the user's email here
+			// The email can be updated later via webhook
+			placeholderEmail := params.UserID + "@clerk.placeholder"
+			s.logger.Info("user not found in database, attempting to create user", "clerk_id", params.UserID)
+			
+			if s.userService != nil {
+				createdUser, createErr := s.userService.CreateUser(ctx, params.UserID, placeholderEmail)
+				if createErr != nil {
+					// Check if user was created by another request (race condition)
+					// The user_service returns ErrUserAlreadyExists for idempotent operations
+					// We need to import the error from user_service, but since it's in the same package,
+					// we can check the error message
+					if strings.Contains(createErr.Error(), "already exists") {
+						// User was created by another request, fetch it
+						user, err = s.store.GetUserByClerkID(ctx, params.UserID)
+						if err != nil {
+							return WalletInfo{}, fmt.Errorf("failed to get user after creation: %w", err)
+						}
+						s.logger.Info("user was created by another request, fetched existing user", "user_id", user.ID, "clerk_id", params.UserID)
+					} else {
+						s.logger.Error("failed to create user automatically", "error", createErr, "clerk_id", params.UserID)
+						return WalletInfo{}, fmt.Errorf("user not found and failed to create: %w", createErr)
+					}
+				} else {
+					user = createdUser
+					s.logger.Info("user created automatically", "user_id", user.ID, "clerk_id", params.UserID)
+				}
+			} else {
+				// UserService not available - return error
+				s.logger.Warn("user not found and userService not available", "clerk_id", params.UserID)
+				return WalletInfo{}, errors.New("user not found in database. Please ensure you have completed sign-up and the user webhook has been processed")
+			}
+		} else {
+			return WalletInfo{}, fmt.Errorf("failed to get user: %w", err)
 		}
-		return WalletInfo{}, fmt.Errorf("failed to get user: %w", err)
 	}
 
 	// 2. Check if user already has an active wallet

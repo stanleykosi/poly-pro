@@ -78,7 +78,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 
 	// Initialize services
 	userService := services.NewUserService(store, logger)
-	walletService := services.NewWalletService(store, logger, vaultService)
+	walletService := services.NewWalletService(store, logger, vaultService, userService)
 	polymarketService := services.NewPolymarketService(store, logger, signerClient, config)
 	marketStreamService := services.NewMarketStreamService(ctx, logger, redisClient, config, store, gammaClient)
 

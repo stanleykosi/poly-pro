@@ -14,6 +14,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/poly-pro/backend/internal/auth"
@@ -82,16 +83,21 @@ func (server *Server) createWallet(c *gin.Context) {
 		server.logger.Error("failed to create wallet", "error", err, "user_id", clerkUserID)
 		
 		// Return appropriate error messages
-		if err.Error() == "user not found" {
-			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "User not found"})
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "user not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"status":  "error",
+				"message": "User not found in database. Please ensure you have completed sign-up. If this issue persists, contact support.",
+				"code":    "USER_NOT_FOUND",
+			})
 			return
 		}
-		if err.Error() == "user already has an active wallet" {
+		if errMsg == "user already has an active wallet" {
 			c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "User already has an active wallet"})
 			return
 		}
-		if err.Error() == "invalid funder address format" || err.Error() == "invalid private key" || err.Error() == "private key does not match the provided address" {
-			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": err.Error()})
+		if errMsg == "invalid funder address format" || errMsg == "invalid private key" || errMsg == "private key does not match the provided address" {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": errMsg})
 			return
 		}
 		
@@ -132,8 +138,18 @@ func (server *Server) getWallets(c *gin.Context) {
 	if err != nil {
 		server.logger.Error("failed to get wallets", "error", err, "user_id", clerkUserID)
 		
-		if err.Error() == "user not found" {
-			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "User not found"})
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "user not found") {
+			// User doesn't exist - return empty array instead of error
+			// This allows the frontend to show the wallet creation modal
+			server.logger.Warn("user not found when getting wallets, returning empty array", "clerk_id", clerkUserID)
+			c.JSON(http.StatusOK, gin.H{
+				"status": "success",
+				"data":   []services.WalletInfo{},
+				"meta": gin.H{
+					"count": 0,
+				},
+			})
 			return
 		}
 		
