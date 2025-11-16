@@ -24,6 +24,7 @@
 import { useState, useEffect } from 'react'
 import { Market } from '@/types'
 import { useMarketSubscription } from '@/hooks/use-market-subscription'
+import { useApi } from '@/hooks/use-api'
 import { walletService } from '@/lib/services/wallet-service'
 import {
   Card,
@@ -55,11 +56,13 @@ export default function TradingTerminal({
   const [showWalletModal, setShowWalletModal] = useState(false)
   const [walletCheckLoading, setWalletCheckLoading] = useState(true)
 
+  const api = useApi()
+
   // Check if user has a wallet on mount
   useEffect(() => {
     const checkWallet = async () => {
       try {
-        const hasActiveWallet = await walletService.hasActiveWallet()
+        const hasActiveWallet = await walletService.hasActiveWallet(api)
         setHasWallet(hasActiveWallet)
         if (!hasActiveWallet) {
           setShowWalletModal(true)
@@ -72,12 +75,12 @@ export default function TradingTerminal({
       }
     }
     checkWallet()
-  }, [])
+  }, [api])
 
   const handleWalletCreated = async () => {
     // Re-check wallet status after creation
     try {
-      const hasActiveWallet = await walletService.hasActiveWallet()
+      const hasActiveWallet = await walletService.hasActiveWallet(api)
       setHasWallet(hasActiveWallet)
     } catch (error) {
       console.error('Failed to check wallet after creation:', error)

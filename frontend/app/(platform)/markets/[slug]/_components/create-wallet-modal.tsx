@@ -9,6 +9,7 @@
 
 import { useState, FormEvent } from 'react'
 import { useApi } from '@/hooks/use-api'
+import { walletService } from '@/lib/services/wallet-service'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -57,22 +58,18 @@ export default function CreateWalletModal({
             }
           : {}
 
-      const response = await api.post('/api/v1/wallets', requestBody)
+      await walletService.createWallet(api, requestBody)
 
-      if (response.data.status === 'success') {
-        setSuccess('Wallet created successfully!')
-        setTimeout(() => {
-          onSuccess()
-          onOpenChange(false)
-          // Reset form
-          setFunderAddress('')
-          setPrivateKey('')
-          setMode('new')
-          setSuccess(null)
-        }, 1500)
-      } else {
-        throw new Error(response.data.message || 'Failed to create wallet')
-      }
+      setSuccess('Wallet created successfully!')
+      setTimeout(() => {
+        onSuccess()
+        onOpenChange(false)
+        // Reset form
+        setFunderAddress('')
+        setPrivateKey('')
+        setMode('new')
+        setSuccess(null)
+      }, 1500)
     } catch (err: any) {
       console.error('Failed to create wallet:', err)
       const errorMessage =

@@ -216,8 +216,10 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 			walletRoutes := authGroup.Group("/wallets")
 			{
 				// Endpoint to create a new wallet
+				walletRoutes.POST("", server.createWallet)
 				walletRoutes.POST("/", server.createWallet)
 				// Endpoint to get user's wallets
+				walletRoutes.GET("", server.getWallets)
 				walletRoutes.GET("/", server.getWallets)
 			}
 
