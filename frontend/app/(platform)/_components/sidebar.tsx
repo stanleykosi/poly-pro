@@ -26,6 +26,7 @@ import { usePathname } from 'next/navigation'
 import { UserButton } from '@clerk/nextjs'
 import { LayoutDashboard, Wallet } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import WalletDisplay from './wallet-display'
 
 // Define the structure for a navigation link
 interface NavLink {
@@ -72,7 +73,8 @@ export default function Sidebar() {
           })}
         </ul>
       </nav>
-      <div className="mt-auto">
+      <div className="mt-auto space-y-3">
+        <WalletDisplay />
         <div className="flex items-center space-x-3 p-2">
           <UserButton afterSignOutUrl="/" />
           <span className="text-sm font-medium text-foreground">My Account</span>

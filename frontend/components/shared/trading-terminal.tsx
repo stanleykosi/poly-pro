@@ -132,37 +132,45 @@ export default function TradingTerminal({
           </div>
         )}
       </header>
-      <div className="grid h-full flex-1 grid-cols-1 gap-6 lg:grid-cols-4">
-        {/* Main content area for the chart */}
-        <div className="lg:col-span-3 min-h-[600px]">
-          <Card className="h-full flex flex-col">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Price Chart</CardTitle>
-              <CardDescription>Real-time market data</CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1 min-h-0">
-              <LightweightChart marketId={initialMarketData.id} />
-            </CardContent>
-          </Card>
+      <div className="flex flex-col gap-6 flex-1 min-h-0">
+        {/* Top row: Chart and Order Book side by side */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Chart takes 2/3 of the width */}
+          <div className="lg:col-span-2 min-h-[500px]">
+            <Card className="h-full flex flex-col">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Price Chart</CardTitle>
+                <CardDescription>Real-time market data</CardDescription>
+              </CardHeader>
+              <CardContent className="flex-1 min-h-0">
+                <LightweightChart marketId={initialMarketData.id} />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Order Book takes 1/3 of the width */}
+          <div className="min-h-[500px]">
+            <Card className="h-full flex flex-col">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Order Book</CardTitle>
+                <CardDescription className="text-xs">Live bids and asks</CardDescription>
+              </CardHeader>
+              <CardContent className="flex-1 min-h-0 p-0">
+                <OrderBook
+                  marketId={initialMarketData.id}
+                  onPriceSelect={setSelectedPrice}
+                />
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
-        {/* Sidebar area for order book and order entry */}
-        <div className="flex flex-col gap-6">
-          <Card className="flex flex-col min-h-0">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Order Book</CardTitle>
-              <CardDescription className="text-xs">Live bids and asks</CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1 min-h-0 p-0">
-              <OrderBook
-                marketId={initialMarketData.id}
-                onPriceSelect={setSelectedPrice}
-              />
-            </CardContent>
-          </Card>
+        {/* Bottom row: Place Order Form full width */}
+        <div className="w-full">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Place Order</CardTitle>
+              <CardDescription>Create limit or market orders</CardDescription>
             </CardHeader>
             <CardContent>
               <PlaceOrderForm

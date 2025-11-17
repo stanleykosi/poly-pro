@@ -82,13 +82,40 @@ export function useApi(): ApiClient {
         throw new Error('User is not authenticated.')
       }
 
-      return api({
-        ...config,
-        headers: {
-          ...(config.headers || {}),
-          Authorization: `Bearer ${token}`,
-        },
+      const fullUrl = `${api.defaults.baseURL || ''}${config.url}`
+      console.log('[useApi] Making request:', {
+        method: config.method,
+        url: config.url,
+        fullUrl,
+        baseURL: api.defaults.baseURL,
+        hasToken: !!token,
       })
+
+      try {
+        const response = await api({
+          ...config,
+          headers: {
+            ...(config.headers || {}),
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        console.log('[useApi] Request successful:', {
+          method: config.method,
+          url: config.url,
+          status: response.status,
+        })
+        return response
+      } catch (error: any) {
+        console.error('[useApi] Request failed:', {
+          method: config.method,
+          url: config.url,
+          fullUrl,
+          status: error.response?.status,
+          message: error.message,
+          responseData: error.response?.data,
+        })
+        throw error
+      }
     },
     [getToken]
   )

@@ -61,6 +61,10 @@ export default function CreateWalletModal({
       await walletService.createWallet(api, requestBody)
 
       setSuccess('Wallet created successfully!')
+      
+      // Dispatch custom event to notify other components
+      window.dispatchEvent(new CustomEvent('wallet-created'))
+      
       setTimeout(() => {
         onSuccess()
         onOpenChange(false)

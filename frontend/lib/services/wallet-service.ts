@@ -59,11 +59,29 @@ class WalletService {
    * Get all wallets for the authenticated user
    */
   async getWallets(api: ApiClient): Promise<Wallet[]> {
-    const response = await api.get<GetWalletsResponse>('/api/v1/wallets')
-    if (response.data.status === 'success') {
-      return response.data.data
+    console.log('[WalletService] Fetching wallets from /api/v1/wallets')
+    try {
+      const response = await api.get<GetWalletsResponse>('/api/v1/wallets')
+      console.log('[WalletService] Wallet response received:', {
+        status: response.status,
+        dataStatus: response.data.status,
+        walletCount: response.data.data?.length || 0,
+        wallets: response.data.data,
+      })
+      if (response.data.status === 'success') {
+        return response.data.data
+      }
+      throw new Error('Failed to retrieve wallets')
+    } catch (error: any) {
+      console.error('[WalletService] Error fetching wallets:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url,
+        baseURL: error.config?.baseURL,
+      })
+      throw error
     }
-    throw new Error('Failed to retrieve wallets')
   }
 
   /**
