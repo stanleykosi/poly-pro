@@ -60,22 +60,32 @@ export default function TradingTerminal({
 
   // Check if user has a wallet on mount
   useEffect(() => {
+    let mounted = true
     const checkWallet = async () => {
       try {
         const hasActiveWallet = await walletService.hasActiveWallet(api)
-        setHasWallet(hasActiveWallet)
-        if (!hasActiveWallet) {
-          setShowWalletModal(true)
+        if (mounted) {
+          setHasWallet(hasActiveWallet)
+          if (!hasActiveWallet) {
+            setShowWalletModal(true)
+          }
         }
       } catch (error) {
         console.error('Failed to check wallet:', error)
-        setHasWallet(false)
+        if (mounted) {
+          setHasWallet(false)
+        }
       } finally {
-        setWalletCheckLoading(false)
+        if (mounted) {
+          setWalletCheckLoading(false)
+        }
       }
     }
     checkWallet()
-  }, [api])
+    return () => {
+      mounted = false
+    }
+  }, []) // Empty dependency array - only run on mount
 
   const handleWalletCreated = async () => {
     // Re-check wallet status after creation

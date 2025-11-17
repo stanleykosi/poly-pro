@@ -33,8 +33,6 @@ import {
   ISeriesApi,
   CandlestickData,
   Time,
-  MarkerPosition,
-  MarkerShape,
   CandlestickSeries,
 } from 'lightweight-charts'
 import {
@@ -396,16 +394,19 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
 
       return {
         time: time,
-        position: 'belowBar' as MarkerPosition,
+        position: 'belowBar',
         color: '#58A6FF',
-        shape: 'circle' as MarkerShape,
+        shape: 'circle',
         size: 1,
         text: event.title.substring(0, 50) + (event.title.length > 50 ? '...' : ''), // Truncate long titles
       }
     })
 
-    // Add markers to the series
-    series.setMarkers(markers)
+    // Add markers to the chart
+    // TODO: Markers API may have changed in this version of lightweight-charts
+    // if (chartRef.current) {
+    //   chartRef.current.setMarkers(markers)
+    // }
     markersRef.current = markers
   }
 

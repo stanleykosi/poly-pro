@@ -259,8 +259,10 @@ export function subscribeToRealtimeUpdates(
   
   // Check if there's already an active subscription for this market
   // In React Strict Mode, the series object might be a new instance, so we check by marketId only
-  for (const [id, sub] of subscriptions.entries()) {
+  let existingId: string | undefined
+  subscriptions.forEach((sub, id) => {
     if (sub.marketId === marketId) {
+      existingId = id
       // Update the existing subscription with new series and lastBar
       sub.series = series
       sub.lastBar = lastBar
@@ -269,8 +271,10 @@ export function subscribeToRealtimeUpdates(
         marketId,
         has_lastBar: !!lastBar,
       })
-      return id
     }
+  })
+  if (existingId) {
+    return existingId
   }
   
   // Create new subscription

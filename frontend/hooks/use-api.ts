@@ -83,13 +83,16 @@ export function useApi(): ApiClient {
       }
 
       const fullUrl = `${api.defaults.baseURL || ''}${config.url}`
-      console.log('[useApi] Making request:', {
-        method: config.method,
-        url: config.url,
-        fullUrl,
-        baseURL: api.defaults.baseURL,
-        hasToken: !!token,
-      })
+      // Only log in development to reduce console noise
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[useApi] Making request:', {
+          method: config.method,
+          url: config.url,
+          fullUrl,
+          baseURL: api.defaults.baseURL,
+          hasToken: !!token,
+        })
+      }
 
       try {
         const response = await api({
@@ -99,21 +102,26 @@ export function useApi(): ApiClient {
             Authorization: `Bearer ${token}`,
           },
         })
-        console.log('[useApi] Request successful:', {
-          method: config.method,
-          url: config.url,
-          status: response.status,
-        })
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[useApi] Request successful:', {
+            method: config.method,
+            url: config.url,
+            status: response.status,
+          })
+        }
         return response
       } catch (error: any) {
-        console.error('[useApi] Request failed:', {
-          method: config.method,
-          url: config.url,
-          fullUrl,
-          status: error.response?.status,
-          message: error.message,
-          responseData: error.response?.data,
-        })
+        // Only log errors in development, or if it's not a 401 (which is expected for unauthenticated users)
+        if (process.env.NODE_ENV === 'development' || error.response?.status !== 401) {
+          console.error('[useApi] Request failed:', {
+            method: config.method,
+            url: config.url,
+            fullUrl,
+            status: error.response?.status,
+            message: error.message,
+            responseData: error.response?.data,
+          })
+        }
         throw error
       }
     },

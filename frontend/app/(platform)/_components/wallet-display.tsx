@@ -12,7 +12,7 @@
 
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useApi } from '@/hooks/use-api'
 import { walletService, Wallet } from '@/lib/services/wallet-service'
 import { Wallet as WalletIcon, Copy, Check } from 'lucide-react'
@@ -31,12 +31,31 @@ export default function WalletDisplay() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const api = useApi()
+  const fetchingRef = useRef(false)
+  const mountedRef = useRef(true)
+  const apiRef = useRef(api)
+
+  // Keep apiRef up to date
+  useEffect(() => {
+    apiRef.current = api
+  }, [api])
 
   const fetchWallet = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (fetchingRef.current) {
+      return
+    }
+
     try {
+      fetchingRef.current = true
       setLoading(true)
       setError(null)
-      const wallets = await walletService.getWallets(api)
+      // Use apiRef to get the latest API instance
+      const wallets = await walletService.getWallets(apiRef.current)
+      
+      // Only update state if component is still mounted
+      if (!mountedRef.current) return
+      
       // Handle empty array - no wallet exists
       if (!wallets || wallets.length === 0) {
         setWallet(null)
@@ -44,34 +63,49 @@ export default function WalletDisplay() {
       } else {
         const activeWallet = wallets.find((w) => w.is_active) || wallets[0]
         setWallet(activeWallet || null)
+        setError(null)
       }
     } catch (err: any) {
       console.error('Failed to fetch wallet:', err)
-      // If it's a 404 or empty response, that's okay - just no wallet
-      if (err.response?.status === 404 || err.response?.status === 200) {
+      
+      // Only update state if component is still mounted
+      if (!mountedRef.current) return
+      
+      // Handle 401 (unauthorized) - user not authenticated or token expired
+      if (err.response?.status === 401) {
+        setWallet(null)
+        setError(null) // Don't show error for auth issues, just show "No wallet found"
+      } else if (err.response?.status === 404 || err.response?.status === 200) {
         setWallet(null)
         setError(null)
       } else {
         setError('Failed to load wallet')
       }
     } finally {
-      setLoading(false)
+      if (mountedRef.current) {
+        setLoading(false)
+      }
+      fetchingRef.current = false
     }
-  }, [api])
+  }, []) // No dependencies - uses apiRef
 
   useEffect(() => {
+    mountedRef.current = true
     fetchWallet()
 
     // Listen for wallet creation events
     const handleWalletCreated = () => {
-      fetchWallet()
+      if (mountedRef.current && !fetchingRef.current) {
+        fetchWallet()
+      }
     }
 
     window.addEventListener('wallet-created', handleWalletCreated)
     return () => {
+      mountedRef.current = false
       window.removeEventListener('wallet-created', handleWalletCreated)
     }
-  }, [fetchWallet])
+  }, [fetchWallet]) // Only depends on fetchWallet, which is stable
 
   const handleCopy = async () => {
     if (!wallet) return
