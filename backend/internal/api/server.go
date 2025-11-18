@@ -118,6 +118,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 			"http://localhost:3000",
 			"http://localhost:3001",
 			"https://poly-pro-production.up.railway.app",
+			"https://poly-pro-five.vercel.app",
 		}
 		
 		// Check if origin is in allowed list
