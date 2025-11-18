@@ -24,6 +24,25 @@ export interface OrderBookLevel {
 }
 
 /**
+ * @interface OrderBookLevelWithDepth
+ * @description Extended order book level with depth calculation for visualization.
+ * @property {string} price - The price level, as a string to maintain precision.
+ * @property {string} size - The total volume of orders at this price level, as a string.
+ * @property {number} cumulativeSize - Running total of size from this level outward.
+ * @property {number} depthPercentage - Percentage of total depth for visualization.
+ * @property {boolean} isNew - Flag to indicate newly added levels for animations.
+ * @property {boolean} isChanged - Flag to indicate recently changed levels.
+ * @property {'increasing' | 'decreasing' | 'stable'} trend - Price trend indicator.
+ */
+export interface OrderBookLevelWithDepth extends OrderBookLevel {
+  cumulativeSize: number
+  depthPercentage: number
+  isNew?: boolean
+  isChanged?: boolean
+  trend?: 'increasing' | 'decreasing' | 'stable'
+}
+
+/**
  * @interface OrderBook
  * @description Represents the complete order book for a market, containing arrays of bids and asks.
  * @property {OrderBookLevel[]} bids - An array of the current buy orders, sorted from highest to lowest price.
@@ -32,6 +51,29 @@ export interface OrderBookLevel {
 export interface OrderBook {
   bids: OrderBookLevel[]
   asks: OrderBookLevel[]
+}
+
+/**
+ * @interface ProcessedOrderBook
+ * @description Processed order book data with depth calculations and metadata.
+ * @property {OrderBookLevelWithDepth[]} bids - Processed bids with depth information.
+ * @property {OrderBookLevelWithDepth[]} asks - Processed asks with depth information.
+ * @property {number} spread - Current spread between best bid and ask.
+ * @property {number} spreadPercentage - Spread as a percentage.
+ * @property {number} maxDepth - Maximum cumulative depth for visualization scaling.
+ * @property {boolean} isLoading - Loading state indicator.
+ * @property {string} lastUpdate - Timestamp of last update.
+ * @property {'bullish' | 'bearish' | 'neutral'} marketSentiment - Current market sentiment.
+ */
+export interface ProcessedOrderBook {
+  bids: OrderBookLevelWithDepth[]
+  asks: OrderBookLevelWithDepth[]
+  spread: number
+  spreadPercentage: number
+  maxDepth: number
+  isLoading: boolean
+  lastUpdate: string
+  marketSentiment: 'bullish' | 'bearish' | 'neutral'
 }
 
 /**

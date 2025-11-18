@@ -31,6 +31,7 @@
 
 import { useEffect } from 'react'
 import websocketService from '@/lib/services/websocket-service'
+import { useMarketStore } from '@/lib/stores/market-store'
 
 // The WebSocket URL is sourced from environment variables, with a fallback for local development.
 // If NEXT_PUBLIC_WS_URL is not set, derive it from NEXT_PUBLIC_API_URL
@@ -66,6 +67,9 @@ export function useMarketSubscription(marketId: string | null | undefined) {
       return
     }
 
+    // Set loading state when starting subscription
+    useMarketStore.getState().setOrderBookLoading(marketId, true)
+
     // 1. Establish the WebSocket connection. The service is a singleton, so this will
     // either initiate a new connection or use the existing one without duplication.
     websocketService.connect(WS_URL)
@@ -76,6 +80,8 @@ export function useMarketSubscription(marketId: string | null | undefined) {
     // 3. Return a cleanup function. This function will be called by React when the
     // component unmounts or when the `marketId` dependency changes.
     return () => {
+      // Clear loading state when unsubscribing
+      useMarketStore.getState().setOrderBookLoading(marketId, false)
       websocketService.unsubscribe(marketId)
       // We do not call `disconnect()` here, as other components might still be
       // subscribed to other markets using the same shared connection.

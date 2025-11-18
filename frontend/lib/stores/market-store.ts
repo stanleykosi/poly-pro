@@ -18,7 +18,7 @@
 "use client"
 
 import { create } from 'zustand'
-import { MarketData, WebSocketBookMessage } from '@/types'
+import { MarketData, WebSocketBookMessage, ProcessedOrderBook, OrderBookLevelWithDepth, OrderBookLevel } from '@/types'
 
 /**
  * @interface MarketState
@@ -27,28 +27,145 @@ import { MarketData, WebSocketBookMessage } from '@/types'
  *   corresponding market data objects.
  * @property {(marketId: string, message: WebSocketBookMessage) => void} setOrderBook - An action to update
  *   the order book for a specific market based on a new WebSocket message.
+ * @property {(marketId: string) => void} setOrderBookLoading - Set loading state for order book.
+ * @property {(marketId: string) => ProcessedOrderBook | null} getProcessedOrderBook - Get processed order book data.
  */
 interface MarketState {
   markets: Record<string, MarketData>
+  processedOrderBooks: Record<string, ProcessedOrderBook>
   setOrderBook: (marketId: string, message: WebSocketBookMessage) => void
+  setOrderBookLoading: (marketId: string, isLoading: boolean) => void
+  getProcessedOrderBook: (marketId: string) => ProcessedOrderBook | null
+}
+
+/**
+ * @function processOrderBook
+ * @description Processes raw order book data into enhanced format with depth calculations.
+ */
+const processOrderBook = (
+  bids: OrderBookLevel[],
+  asks: OrderBookLevel[],
+  previousProcessed?: ProcessedOrderBook
+): ProcessedOrderBook => {
+  // Filter out invalid entries
+  const validBids = bids.filter(bid =>
+    bid.price !== '' && bid.size !== '' &&
+    !isNaN(parseFloat(bid.price)) && !isNaN(parseFloat(bid.size)) &&
+    parseFloat(bid.price) > 0 && parseFloat(bid.size) > 0
+  )
+
+  const validAsks = asks.filter(ask =>
+    ask.price !== '' && ask.size !== '' &&
+    !isNaN(parseFloat(ask.price)) && !isNaN(parseFloat(ask.size)) &&
+    parseFloat(ask.price) > 0 && parseFloat(ask.size) > 0
+  )
+
+  // Calculate cumulative sizes
+  const bidsWithDepth: OrderBookLevelWithDepth[] = []
+  const asksWithDepth: OrderBookLevelWithDepth[] = []
+
+  let bidCumulative = 0
+  for (const bid of validBids) {
+    const size = parseFloat(bid.size)
+    bidCumulative += size
+    bidsWithDepth.push({
+      ...bid,
+      cumulativeSize: bidCumulative,
+      depthPercentage: 0, // Will be calculated after max depth is known
+    })
+  }
+
+  let askCumulative = 0
+  for (const ask of validAsks) {
+    const size = parseFloat(ask.size)
+    askCumulative += size
+    asksWithDepth.push({
+      ...ask,
+      cumulativeSize: askCumulative,
+      depthPercentage: 0, // Will be calculated after max depth is known
+    })
+  }
+
+  // Calculate max depth and percentages
+  const maxDepth = Math.max(bidCumulative, askCumulative)
+
+  bidsWithDepth.forEach(bid => {
+    bid.depthPercentage = maxDepth > 0 ? (bid.cumulativeSize / maxDepth) * 100 : 0
+  })
+
+  asksWithDepth.forEach(ask => {
+    ask.depthPercentage = maxDepth > 0 ? (ask.cumulativeSize / maxDepth) * 100 : 0
+  })
+
+  // Calculate spread
+  const bestBid = validBids.length > 0 ? parseFloat(validBids[0].price) : 0
+  const bestAsk = validAsks.length > 0 ? parseFloat(validAsks[0].price) : 0
+  const spread = bestBid > 0 && bestAsk > 0 ? bestAsk - bestBid : 0
+  const spreadPercentage = bestBid > 0 ? (spread / bestBid) * 100 : 0
+
+  // Determine market sentiment
+  let marketSentiment: 'bullish' | 'bearish' | 'neutral' = 'neutral'
+  if (validBids.length > 0 && validAsks.length > 0) {
+    const bidDepth = bidCumulative
+    const askDepth = askCumulative
+    const depthRatio = bidDepth / (bidDepth + askDepth)
+    if (depthRatio > 0.6) marketSentiment = 'bullish'
+    else if (depthRatio < 0.4) marketSentiment = 'bearish'
+  }
+
+  // Mark new/changed levels for animations
+  if (previousProcessed) {
+    const existingBidPrices = new Set(previousProcessed.bids.map(b => b.price))
+    const existingAskPrices = new Set(previousProcessed.asks.map(a => a.price))
+
+    bidsWithDepth.forEach(bid => {
+      if (!existingBidPrices.has(bid.price)) {
+        bid.isNew = true
+      } else {
+        const prevBid = previousProcessed.bids.find(b => b.price === bid.price)
+        if (prevBid && parseFloat(prevBid.size) !== parseFloat(bid.size)) {
+          bid.isChanged = true
+        }
+      }
+    })
+
+    asksWithDepth.forEach(ask => {
+      if (!existingAskPrices.has(ask.price)) {
+        ask.isNew = true
+      } else {
+        const prevAsk = previousProcessed.asks.find(a => a.price === ask.price)
+        if (prevAsk && parseFloat(prevAsk.size) !== parseFloat(ask.size)) {
+          ask.isChanged = true
+        }
+      }
+    })
+  }
+
+  return {
+    bids: bidsWithDepth,
+    asks: asksWithDepth,
+    spread,
+    spreadPercentage,
+    maxDepth,
+    isLoading: false,
+    lastUpdate: new Date().toISOString(),
+    marketSentiment,
+  }
 }
 
 /**
  * @function useMarketStore
  * @description Creates and exports the Zustand store for market data.
- *
- * @property {Record<string, MarketData>} markets - The initial state is an empty object. It will be populated
- *   with market data as WebSocket messages are received.
- * @property {Function} setOrderBook - The action that updates the store. It takes a market ID and a
- *   WebSocket message, then immutably updates the state by adding or replacing the data for that market.
  */
-export const useMarketStore = create<MarketState>((set) => ({
+export const useMarketStore = create<MarketState>((set, get) => ({
   markets: {},
+  processedOrderBooks: {},
+
   setOrderBook: (marketId, message) =>
     set((state) => {
       const existingMarket = state.markets[marketId]
       const newTimestamp = parseInt(message.timestamp, 10)
-      
+
       // Helper function to check if two order book arrays are different
       const orderBooksDiffer = (
         a: { price: string; size: string }[],
@@ -64,7 +181,6 @@ export const useMarketStore = create<MarketState>((set) => ({
       }
 
       // Check if data actually changed - compare bids, asks, and timestamp
-      // Always update if market doesn't exist, or if any data changed
       if (existingMarket) {
         const bidsChanged = orderBooksDiffer(
           existingMarket.orderBook.bids,
@@ -78,30 +194,75 @@ export const useMarketStore = create<MarketState>((set) => ({
         const assetIdChanged = existingMarket.assetId !== message.asset_id
 
         // Only skip update if nothing changed at all
-        // This ensures we always update when there's new data, even if it's empty arrays
         if (!bidsChanged && !asksChanged && !timestampChanged && !assetIdChanged) {
-          // Data hasn't changed, but we still want to ensure the store reference updates
-          // to trigger re-renders. However, Zustand will handle this automatically.
           return state
         }
       }
 
-      // Always update if market doesn't exist or data changed
+      // Update raw market data
+      const updatedMarkets = {
+        ...state.markets,
+        [marketId]: {
+          marketId: message.market,
+          assetId: message.asset_id,
+          orderBook: {
+            bids: message.bids || [],
+            asks: message.asks || [],
+          },
+          lastUpdate: newTimestamp,
+        },
+      }
+
+      // Process order book data
+      const processedOrderBook = processOrderBook(
+        message.bids || [],
+        message.asks || [],
+        state.processedOrderBooks[marketId]
+      )
+
       return {
-        markets: {
-          ...state.markets,
-          [marketId]: {
-            marketId: message.market,
-            assetId: message.asset_id,
-            orderBook: {
-              bids: message.bids || [],
-              asks: message.asks || [],
+        markets: updatedMarkets,
+        processedOrderBooks: {
+          ...state.processedOrderBooks,
+          [marketId]: processedOrderBook,
+        },
+      }
+    }),
+
+  setOrderBookLoading: (marketId, isLoading) =>
+    set((state) => {
+      const existingProcessed = state.processedOrderBooks[marketId]
+      if (!existingProcessed) {
+        return {
+          processedOrderBooks: {
+            ...state.processedOrderBooks,
+            [marketId]: {
+              bids: [],
+              asks: [],
+              spread: 0,
+              spreadPercentage: 0,
+              maxDepth: 0,
+              isLoading,
+              lastUpdate: new Date().toISOString(),
+              marketSentiment: 'neutral' as const,
             },
-            // Parse the timestamp string to a number for easier use later.
-            lastUpdate: newTimestamp,
+          },
+        }
+      }
+
+      return {
+        processedOrderBooks: {
+          ...state.processedOrderBooks,
+          [marketId]: {
+            ...existingProcessed,
+            isLoading,
           },
         },
       }
     }),
+
+  getProcessedOrderBook: (marketId) => {
+    return get().processedOrderBooks[marketId] || null
+  },
 }))
 
