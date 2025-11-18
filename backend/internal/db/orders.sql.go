@@ -242,6 +242,60 @@ func (q *Queries) GetOrdersByUserIDAndStatus(ctx context.Context, arg GetOrdersB
 	return items, nil
 }
 
+const getUserPositionsByMarket = `-- name: GetUserPositionsByMarket :many
+SELECT
+  token_id,
+  side,
+  SUM(size) as total_size,
+  AVG(price) as avg_price
+FROM orders
+WHERE user_id = $1
+  AND market_id = $2
+  AND status = 'filled'
+GROUP BY token_id, side
+HAVING SUM(size) > 0
+ORDER BY token_id, side
+`
+
+type GetUserPositionsByMarketParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	MarketID string      `json:"market_id"`
+}
+
+type GetUserPositionsByMarketRow struct {
+	TokenID   string  `json:"token_id"`
+	Side      string  `json:"side"`
+	TotalSize int64   `json:"total_size"`
+	AvgPrice  float64 `json:"avg_price"`
+}
+
+// @description Retrieves user's filled orders (positions) for a specific market, grouped by token and side.
+// This helps determine what shares the user can sell.
+func (q *Queries) GetUserPositionsByMarket(ctx context.Context, arg GetUserPositionsByMarketParams) ([]GetUserPositionsByMarketRow, error) {
+	rows, err := q.db.Query(ctx, getUserPositionsByMarket, arg.UserID, arg.MarketID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetUserPositionsByMarketRow{}
+	for rows.Next() {
+		var i GetUserPositionsByMarketRow
+		if err := rows.Scan(
+			&i.TokenID,
+			&i.Side,
+			&i.TotalSize,
+			&i.AvgPrice,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateOrderPolymarketID = `-- name: UpdateOrderPolymarketID :one
 UPDATE orders
 SET 

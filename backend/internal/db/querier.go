@@ -44,6 +44,9 @@ type Querier interface {
 	// @description Retrieves a single user from the database based on their unique Clerk User ID.
 	// This will be used frequently in authentication middleware to identify the requesting user.
 	GetUserByClerkID(ctx context.Context, clerkUserID string) (User, error)
+	// @description Retrieves user's filled orders (positions) for a specific market, grouped by token and side.
+	// This helps determine what shares the user can sell.
+	GetUserPositionsByMarket(ctx context.Context, arg GetUserPositionsByMarketParams) ([]GetUserPositionsByMarketRow, error)
 	// @description Inserts a new OHLCV bar into the market_price_history table.
 	// This uses the insert_market_price_history() function which automatically creates partitions.
 	// @param time The timestamp for this bar.
@@ -53,7 +56,7 @@ type Querier interface {
 	// @param low The lowest price in the period.
 	// @param close The closing price.
 	// @param volume The trading volume.
-	// @param resolution The resolution/interval (e.g., '15', '60').
+	// @param resolution The resolution/interval (e.g., '15', 'D').
 	InsertMarketPriceHistory(ctx context.Context, arg InsertMarketPriceHistoryParams) error
 	// @description Updates the Polymarket order ID after the order is submitted to Polymarket.
 	UpdateOrderPolymarketID(ctx context.Context, arg UpdateOrderPolymarketIDParams) (Order, error)

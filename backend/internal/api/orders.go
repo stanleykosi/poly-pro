@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/poly-pro/backend/internal/auth"
+	db "github.com/poly-pro/backend/internal/db"
 	"github.com/poly-pro/backend/internal/services"
 )
 
@@ -126,6 +127,50 @@ func (server *Server) placeOrder(c *gin.Context) {
 			"order":       dbOrder,
 			"signed_order": signedOrder,
 		},
+	})
+}
+
+// getUserPositions retrieves user's positions (filled orders) for a specific market
+func (server *Server) getUserPositions(c *gin.Context) {
+	// Get the authenticated user's Clerk ID from the context.
+	clerkUserID, exists := c.Get(string(auth.ClerkUserIDKey))
+	if !exists {
+		server.logger.Error("clerkUserID not found in context for getUserPositions")
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "User identifier not found in request context"})
+		return
+	}
+
+	// Get market ID from URL parameter
+	marketID := c.Param("marketId")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Market ID is required"})
+		return
+	}
+
+	// Get the user by Clerk ID to get their UUID
+	user, err := server.userService.GetUserByClerkID(c.Request.Context(), clerkUserID.(string))
+	if err != nil {
+		server.logger.Error("failed to get user by clerk ID", "error", err, "clerk_user_id", clerkUserID)
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to retrieve user information"})
+		return
+	}
+
+	// Get user positions for this market
+	positions, err := server.store.GetUserPositionsByMarket(c.Request.Context(), db.GetUserPositionsByMarketParams{
+		UserID:   user.ID,
+		MarketID: marketID,
+	})
+	if err != nil {
+		server.logger.Error("failed to get user positions", "error", err, "user_id", user.ID, "market_id", marketID)
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to retrieve user positions"})
+		return
+	}
+
+	server.logger.Info("retrieved user positions", "user_id", user.ID, "market_id", marketID, "position_count", len(positions))
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   positions,
 	})
 }
 

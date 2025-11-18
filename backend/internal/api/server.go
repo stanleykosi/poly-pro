@@ -44,6 +44,7 @@ type Server struct {
 	hub                 *websocket.Hub
 	redisClient         *redis.Client
 	gammaClient         *polymarket.GammaAPIClient
+	dataClient          *polymarket.DataAPIClient
 }
 
 /**
@@ -73,6 +74,9 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 	// Initialize Gamma API client
 	gammaClient := polymarket.NewGammaAPIClient(config.GammaAPIURL, logger)
 
+	// Initialize Data API client
+	dataClient := polymarket.NewDataAPIClient(config.DataAPIURL, logger)
+
 	// Initialize vault service for secure private key storage
 	vaultService := services.NewInMemoryVaultService(logger)
 
@@ -99,6 +103,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		hub:                 hub,
 		redisClient:         redisClient,
 		gammaClient:         gammaClient,
+		dataClient:          dataClient,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -221,6 +226,8 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 				// Endpoint to get user's wallets
 				walletRoutes.GET("", server.getWallets)
 				walletRoutes.GET("/", server.getWallets)
+				// Endpoint to get wallet balance
+				walletRoutes.GET("/balance", server.getWalletBalance)
 			}
 
 			// Order-related protected routes
@@ -228,6 +235,13 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 			{
 				// Endpoint to place a new order.
 				orderRoutes.POST("/", server.placeOrder)
+			}
+
+			// Positions-related protected routes
+			positionRoutes := authGroup.Group("/positions")
+			{
+				// Endpoint to get user's positions for a specific market
+				positionRoutes.GET("/:marketId", server.getUserPositions)
 			}
 		}
 	}

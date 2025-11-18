@@ -37,6 +37,7 @@ type Config struct {
 	CLOBAPIKey          string // CLOB API key (required for trading operations)
 	CLOBAPISecret       string // CLOB API secret (required for trading operations)
 	CLOBAPIPassphrase   string // CLOB API passphrase (required for trading operations)
+	DataAPIURL          string // Data API base URL (defaults to https://data-api.polymarket.com)
 }
 
 /**
@@ -88,6 +89,7 @@ func LoadConfig(path string) (config Config, err error) {
 	config.CLOBAPIKey = os.Getenv("CLOB_API_KEY")
 	config.CLOBAPISecret = os.Getenv("CLOB_API_SECRET")
 	config.CLOBAPIPassphrase = os.Getenv("CLOB_API_PASSPHRASE")
+	config.DataAPIURL = os.Getenv("DATA_API_URL")
 
 	// Validate that critical variables are not empty
 	if config.DatabaseURL == "" {

@@ -30,6 +30,8 @@ export default function WalletDisplay() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [balance, setBalance] = useState<string | null>(null)
+  const [balanceLoading, setBalanceLoading] = useState(false)
   const api = useApi()
   const fetchingRef = useRef(false)
   const mountedRef = useRef(true)
@@ -64,6 +66,11 @@ export default function WalletDisplay() {
         const activeWallet = wallets.find((w) => w.is_active) || wallets[0]
         setWallet(activeWallet || null)
         setError(null)
+
+        // Fetch balance for the active wallet
+        if (activeWallet) {
+          fetchBalance()
+        }
       }
     } catch (err: any) {
       console.error('Failed to fetch wallet:', err)
@@ -106,6 +113,24 @@ export default function WalletDisplay() {
       window.removeEventListener('wallet-created', handleWalletCreated)
     }
   }, [fetchWallet]) // Only depends on fetchWallet, which is stable
+
+  const fetchBalance = async () => {
+    if (!wallet) return
+    try {
+      setBalanceLoading(true)
+      const balanceData = await walletService.getWalletBalance(apiRef.current)
+      if (mountedRef.current) {
+        setBalance(balanceData.usdc_balance)
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch balance:', err)
+      // Don't show error for balance failures, just leave it empty
+    } finally {
+      if (mountedRef.current) {
+        setBalanceLoading(false)
+      }
+    }
+  }
 
   const handleCopy = async () => {
     if (!wallet) return
@@ -185,6 +210,23 @@ export default function WalletDisplay() {
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
+
+      {/* Balance Display */}
+      <div className="flex items-center space-x-2 mt-2 pt-2 border-t border-border">
+        <span className="text-xs text-muted-foreground">Balance:</span>
+        {balanceLoading ? (
+          <div className="h-4 w-12 bg-muted animate-pulse rounded"></div>
+        ) : balance !== null ? (
+          <span className="text-xs font-mono font-semibold text-foreground">
+            ${parseFloat(balance).toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2
+            })} USDC
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">Unable to load</span>
+        )}
+      </div>
     </div>
   )
 }

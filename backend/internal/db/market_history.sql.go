@@ -122,7 +122,7 @@ type InsertMarketPriceHistoryParams struct {
 // @param low The lowest price in the period.
 // @param close The closing price.
 // @param volume The trading volume.
-// @param resolution The resolution/interval (e.g., '15', '60').
+// @param resolution The resolution/interval (e.g., '15', 'D').
 func (q *Queries) InsertMarketPriceHistory(ctx context.Context, arg InsertMarketPriceHistoryParams) error {
 	_, err := q.db.Exec(ctx, insertMarketPriceHistory,
 		arg.PTime,

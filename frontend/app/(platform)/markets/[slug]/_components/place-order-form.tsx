@@ -62,6 +62,40 @@ export default function PlaceOrderForm({
 
   const api = useApi()
   const orderBook = useMarketStore((s) => s.markets[marketId]?.orderBook)
+  const [userPositions, setUserPositions] = useState<any[]>([])
+  const [positionsLoading, setPositionsLoading] = useState(false)
+
+  // Check if we're in sandbox/test environment
+  const isSandbox = useMemo(() => {
+    return process.env.NEXT_PUBLIC_SANDBOX_MODE === 'true' ||
+           process.env.NEXT_PUBLIC_ENV === 'development' ||
+           window.location.hostname.includes('localhost')
+  }, [])
+
+  // Fetch user positions for this market
+  const fetchUserPositions = async () => {
+    try {
+      setPositionsLoading(true)
+      const response = await api.get(`/api/v1/positions/${marketId}`)
+      if (response.data.status === 'success') {
+        setUserPositions(response.data.data || [])
+      } else {
+        setUserPositions([])
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch user positions:', err)
+      setUserPositions([])
+    } finally {
+      setPositionsLoading(false)
+    }
+  }
+
+  // Fetch positions when sell is selected
+  useEffect(() => {
+    if (side === 'SELL') {
+      fetchUserPositions()
+    }
+  }, [side, marketId])
 
   // Get best available prices from order book for market orders
   const bestBid = useMemo(() => {
@@ -130,44 +164,101 @@ export default function PlaceOrderForm({
   }, [orderType, side, bestAsk, bestBid])
 
   // Determine which token ID to use based on side
+  // TODO: For selling, this should check user positions to determine which token they want to sell
   const tokenId = useMemo(() => {
-    if (side === 'BUY_YES' || (side === 'SELL' && yesTokenId)) {
+    if (side === 'BUY_YES') {
       return yesTokenId
     } else if (side === 'BUY_NO') {
       return noTokenId
+    } else if (side === 'SELL') {
+      // For selling, default to YES token for now
+      // TODO: Check user positions to determine which token they have
+      return yesTokenId
     }
     return undefined
   }, [side, yesTokenId, noTokenId])
 
   // Calculate cost, payout, and profit based on Polymarket's pricing model
-  const { cost, payout, profit } = useMemo(() => {
+  const { cost, payout, profit, profitLabel, hasPositions } = useMemo(() => {
     const priceNum = parseFloat(price) || 0
     const sizeNum = parseFloat(size) || 0
 
     if (priceNum <= 0 || sizeNum <= 0 || isNaN(priceNum) || isNaN(sizeNum)) {
-      return { cost: 0, payout: 0, profit: 0 }
+      return { cost: 0, payout: 0, profit: 0, profitLabel: 'Profit', hasPositions: false }
     }
 
     if (side === 'BUY_YES' || side === 'BUY_NO') {
       // For buying: cost = size * price, payout = size if outcome wins ($1 per share)
       const calculatedCost = sizeNum * priceNum
       const calculatedPayout = sizeNum // If the outcome wins, you get $1 per share
+      const calculatedProfit = calculatedPayout - calculatedCost
+
+      let label = 'Profit'
+      if (side === 'BUY_YES') {
+        label = 'Profit if YES wins'
+      } else {
+        label = 'Profit if NO wins'
+      }
+
       return {
         cost: calculatedCost,
         payout: calculatedPayout,
-        profit: calculatedPayout - calculatedCost,
+        profit: calculatedProfit,
+        profitLabel: label,
+        hasPositions: false,
       }
     } else {
-      // For selling: you receive size * price
+      // For selling: calculate based on user's actual positions
+      if (userPositions.length === 0) {
+        // No positions - show simplified calculation
+        const receivedAmount = sizeNum * priceNum
+        const potentialPayout = sizeNum
+        return {
+          cost: potentialPayout - receivedAmount,
+          payout: receivedAmount,
+          profit: receivedAmount - potentialPayout,
+          profitLabel: 'Net (no positions found)',
+          hasPositions: false,
+        }
+      }
+
+      // Calculate profit/loss based on user's positions
+      let totalCostBasis = 0
+      let totalSharesToSell = sizeNum
+      let actualProfit = 0
+
+      // Sort positions by average price (sell most expensive first)
+      const sortedPositions = [...userPositions].sort((a, b) => b.avg_price - a.avg_price)
+
+      for (const position of sortedPositions) {
+        if (totalSharesToSell <= 0) break
+
+        const sharesFromThisPosition = Math.min(totalSharesToSell, parseFloat(position.total_size))
+        const costBasisForTheseShares = sharesFromThisPosition * parseFloat(position.avg_price)
+
+        totalCostBasis += costBasisForTheseShares
+        totalSharesToSell -= sharesFromThisPosition
+
+        // If this is a YES position, profit = sell_price - buy_price
+        // If this is a NO position, profit = sell_price - (1 - buy_price)
+        // because NO tokens cost (1 - YES_price) but payout $1 if NO wins
+        if (position.side === 'BUY') {
+          // This is the cost basis we paid, now selling at current price
+          actualProfit += sharesFromThisPosition * (priceNum - parseFloat(position.avg_price))
+        }
+      }
+
       const receivedAmount = sizeNum * priceNum
-      const potentialPayout = sizeNum // If you held and outcome wins
+
       return {
-        cost: potentialPayout - receivedAmount, // Opportunity cost
+        cost: totalCostBasis,
         payout: receivedAmount,
-        profit: receivedAmount - potentialPayout,
+        profit: actualProfit,
+        profitLabel: `Realized P&L (${userPositions.length} position${userPositions.length !== 1 ? 's' : ''})`,
+        hasPositions: true,
       }
     }
-  }, [price, size, side])
+  }, [price, size, side, userPositions])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -259,8 +350,9 @@ export default function PlaceOrderForm({
 
   // Determine button variant based on side
   const buttonVariant = useMemo(() => {
-    if (side === 'BUY_YES' || side === 'BUY_NO') return 'constructive'
-    return 'destructive'
+    if (side === 'BUY_YES') return 'default' // Green
+    if (side === 'BUY_NO') return 'destructive' // Red
+    return 'secondary' // Orange for sell
   }, [side])
 
   // Market price display
@@ -282,7 +374,29 @@ export default function PlaceOrderForm({
   }, [orderType, side, bestAsk, bestBid])
 
   return (
-    <form onSubmit={handleSubmit} className="w-full">
+    <div className="w-full">
+      {/* Sandbox Environment Warning */}
+      {isSandbox && (
+        <div className="mb-4 rounded-lg border-2 border-yellow-200 bg-yellow-50 p-3">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-yellow-800">
+                Sandbox Environment
+              </h3>
+              <div className="mt-2 text-sm text-yellow-700">
+                <p>This is a test environment. Orders will not execute real trades.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="w-full">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Order Type Selection */}
         <div className="space-y-2">
@@ -314,19 +428,19 @@ export default function PlaceOrderForm({
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger
                 value="BUY_YES"
-                className="data-[state=active]:bg-constructive data-[state=active]:text-constructive-foreground"
+                className="data-[state=active]:bg-green-600 data-[state=active]:text-white hover:bg-green-700"
               >
                 Buy YES
               </TabsTrigger>
               <TabsTrigger
                 value="BUY_NO"
-                className="data-[state=active]:bg-constructive data-[state=active]:text-constructive-foreground"
+                className="data-[state=active]:bg-red-600 data-[state=active]:text-white hover:bg-red-700"
               >
                 Buy NO
               </TabsTrigger>
               <TabsTrigger
                 value="SELL"
-                className="data-[state=active]:bg-destructive data-[state=active]:text-destructive-foreground"
+                className="data-[state=active]:bg-orange-600 data-[state=active]:text-white hover:bg-orange-700"
               >
                 Sell
               </TabsTrigger>
@@ -384,6 +498,63 @@ export default function PlaceOrderForm({
         </div>
       </div>
 
+      {/* Position Info for Sell Orders */}
+      {side === 'SELL' && (
+        <div className={`mt-4 rounded-lg border p-3 ${
+          hasPositions
+            ? 'border-blue-200 bg-blue-50'
+            : positionsLoading
+              ? 'border-gray-200 bg-gray-50'
+              : 'border-orange-200 bg-orange-50'
+        }`}>
+          <div className="flex items-start">
+            <div className="flex-shrink-0">
+              {positionsLoading ? (
+                <svg className="h-5 w-5 text-gray-400 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : hasPositions ? (
+                <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5 text-orange-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <div className="ml-3">
+              <h3 className={`text-sm font-medium ${
+                hasPositions ? 'text-blue-800' : positionsLoading ? 'text-gray-800' : 'text-orange-800'
+              }`}>
+                {positionsLoading ? 'Loading Positions...' : hasPositions ? 'Positions Found' : 'No Positions Found'}
+              </h3>
+              <div className={`mt-2 text-sm ${
+                hasPositions ? 'text-blue-700' : positionsLoading ? 'text-gray-700' : 'text-orange-700'
+              }`}>
+                {positionsLoading ? (
+                  <p>Checking your current positions in this market...</p>
+                ) : hasPositions ? (
+                  <div>
+                    <p className="mb-2">Found {userPositions.length} position{userPositions.length !== 1 ? 's' : ''} in this market:</p>
+                    <ul className="space-y-1">
+                      {userPositions.map((pos, index) => (
+                        <li key={index} className="text-xs">
+                          {parseFloat(pos.total_size).toFixed(2)} shares at avg ${parseFloat(pos.avg_price).toFixed(4)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No filled orders found for this market. You need to buy shares first before you can sell them.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Cost and Payout Summary - Full width below inputs */}
       {(price && size && parseFloat(price) > 0 && parseFloat(size) > 0) && (
         <div className="mt-4 rounded-lg border border-border bg-muted/50 p-4">
@@ -404,11 +575,11 @@ export default function PlaceOrderForm({
             </div>
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">
-                {side === 'SELL' ? 'Net' : 'Profit'}
+                {profitLabel}
               </p>
               <p
                 className={`text-lg font-semibold ${
-                  profit >= 0 ? 'text-constructive' : 'text-destructive'
+                  profit >= 0 ? 'text-green-600' : 'text-red-600'
                 }`}
               >
                 {profit >= 0 ? '+' : ''}${profit.toFixed(2)}
@@ -452,6 +623,7 @@ export default function PlaceOrderForm({
           <p className="text-sm text-constructive text-center">{success}</p>
         </div>
       )}
-    </form>
+      </form>
+    </div>
   )
 }

@@ -67,3 +67,19 @@ SELECT * FROM orders
 WHERE market_id = $1
 ORDER BY created_at DESC;
 
+-- name: GetUserPositionsByMarket :many
+-- @description Retrieves user's filled orders (positions) for a specific market, grouped by token and side.
+-- This helps determine what shares the user can sell.
+SELECT
+  token_id,
+  side,
+  SUM(size) as total_size,
+  AVG(price) as avg_price
+FROM orders
+WHERE user_id = $1
+  AND market_id = $2
+  AND status = 'filled'
+GROUP BY token_id, side
+HAVING SUM(size) > 0
+ORDER BY token_id, side;
+

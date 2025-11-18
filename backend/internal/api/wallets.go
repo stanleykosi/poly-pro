@@ -168,3 +168,75 @@ func (server *Server) getWallets(c *gin.Context) {
 	})
 }
 
+/**
+ * @description
+ * getWalletBalance is a Gin handler that retrieves the USDC balance for the user's active wallet.
+ *
+ * @param c *gin.Context The Gin context for the request.
+ *
+ * @notes
+ * - This handler must be used with the authentication middleware.
+ * - Fetches balance from Polymarket's Data API.
+ * - Returns balance in USDC (as a string to preserve precision).
+ */
+func (server *Server) getWalletBalance(c *gin.Context) {
+	// 1. Retrieve the authenticated user's Clerk ID from the context
+	clerkUserID, exists := c.Get(string(auth.ClerkUserIDKey))
+	if !exists {
+		server.logger.Error("clerkUserID not found in context for getWalletBalance")
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "User identifier not found in request context"})
+		return
+	}
+
+	// 2. Get user's wallets to find the active wallet
+	wallets, err := server.walletService.GetUserWallets(c.Request.Context(), clerkUserID.(string))
+	if err != nil {
+		server.logger.Error("failed to get wallets for balance check", "error", err, "user_id", clerkUserID)
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Failed to retrieve wallet information"})
+		return
+	}
+
+	// 3. Find the active wallet
+	var activeWallet *services.WalletInfo
+	for _, wallet := range wallets {
+		if wallet.IsActive {
+			activeWallet = &wallet
+			break
+		}
+	}
+
+	if activeWallet == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"message": "No active wallet found. Please create or activate a wallet.",
+		})
+		return
+	}
+
+	// 4. Fetch balance from Polymarket Data API
+	balance, err := server.dataClient.GetUserBalance(c.Request.Context(), activeWallet.PolymarketFunderAddress)
+	if err != nil {
+		server.logger.Error("failed to fetch wallet balance", "error", err,
+			"user_id", clerkUserID, "wallet_address", activeWallet.PolymarketFunderAddress)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"message": "Failed to retrieve wallet balance from Polymarket",
+		})
+		return
+	}
+
+	// 5. Return the balance
+	server.logger.Info("wallet balance retrieved successfully",
+		"user_id", clerkUserID,
+		"wallet_address", activeWallet.PolymarketFunderAddress,
+		"usdc_balance", balance.USDC)
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data": gin.H{
+			"usdc_balance": balance.USDC,
+			"wallet_address": activeWallet.PolymarketFunderAddress,
+		},
+	})
+}
+
