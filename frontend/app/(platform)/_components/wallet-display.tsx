@@ -126,10 +126,22 @@ export default function WalletDisplay() {
 
     console.log('[WalletDisplay] Fetching balance for wallet:', wallet.polymarket_funder_address)
 
+    // Create a timeout to automatically fail after 15 seconds
+    const timeoutId = setTimeout(() => {
+      if (mountedRef.current && balanceLoading) {
+        console.error('[WalletDisplay] Balance fetch timed out after 15 seconds')
+        setBalanceError(true)
+        setBalance(null)
+        setBalanceLoading(false)
+      }
+    }, 15000)
+
     try {
       setBalanceLoading(true)
       setBalanceError(false) // Reset error state
       const balanceData = await walletService.getWalletBalance(apiRef.current)
+      clearTimeout(timeoutId) // Clear timeout on success
+
       console.log('[WalletDisplay] Balance data received:', balanceData)
 
       if (mountedRef.current) {
@@ -137,6 +149,7 @@ export default function WalletDisplay() {
         console.log('[WalletDisplay] Balance set to:', balanceData.usdc_balance)
       }
     } catch (err: any) {
+      clearTimeout(timeoutId) // Clear timeout on error
       console.error('[WalletDisplay] Failed to fetch balance:', err)
       if (mountedRef.current) {
         setBalanceError(true)
@@ -233,17 +246,30 @@ export default function WalletDisplay() {
         <span className="text-xs text-muted-foreground">Balance:</span>
         <div className="flex items-center space-x-2">
           {balanceLoading ? (
-            <div className="h-4 w-12 bg-muted animate-pulse rounded"></div>
+            <div className="flex items-center space-x-1">
+              <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-xs text-muted-foreground">Loading...</span>
+            </div>
           ) : balance !== null ? (
-            <span className="text-xs font-mono font-semibold text-foreground">
-              ${parseFloat(balance).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-              })} USDC
-            </span>
+            <div className="flex items-center space-x-1">
+              <span className="text-xs font-mono font-semibold text-foreground">
+                ${parseFloat(balance).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })} USDC
+              </span>
+              <button
+                onClick={fetchBalance}
+                className="text-xs text-muted-foreground hover:text-foreground opacity-50 hover:opacity-100"
+                disabled={balanceLoading}
+                title="Refresh balance"
+              >
+                ↻
+              </button>
+            </div>
           ) : balanceError && wallet ? (
             <div className="flex items-center space-x-1">
-              <span className="text-xs text-red-600 dark:text-red-400">Error</span>
+              <span className="text-xs text-red-600 dark:text-red-400">Failed to load</span>
               <button
                 onClick={fetchBalance}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
@@ -255,7 +281,14 @@ export default function WalletDisplay() {
           ) : wallet ? (
             <div className="flex items-center space-x-1">
               <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-              <span className="text-xs text-yellow-600 dark:text-yellow-400">Loading...</span>
+              <span className="text-xs text-yellow-600 dark:text-yellow-400">Waiting...</span>
+              <button
+                onClick={fetchBalance}
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline ml-1"
+                disabled={balanceLoading}
+              >
+                Load
+              </button>
             </div>
           ) : (
             <span className="text-xs text-muted-foreground">No wallet</span>

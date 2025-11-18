@@ -98,20 +98,35 @@ class WalletService {
    */
   async getWalletBalance(api: ApiClient): Promise<{ usdc_balance: string; wallet_address: string }> {
     console.log('[WalletService] Fetching balance from /api/v1/wallets/balance')
+
+    // Create a timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout after 10 seconds')), 10000)
+    })
+
     try {
-      const response = await api.get<{
+      const apiCall = api.get<{
         status: string;
         data: { usdc_balance: string; wallet_address: string };
         message?: string;
       }>('/api/v1/wallets/balance')
+
+      const response = await Promise.race([apiCall, timeoutPromise])
       console.log('[WalletService] Balance API response:', response)
+
       if (response.data.status === 'success') {
         console.log('[WalletService] Balance success:', response.data.data)
         return response.data.data
       }
       throw new Error(response.data.message || 'Failed to retrieve wallet balance')
-    } catch (error) {
+    } catch (error: any) {
       console.error('[WalletService] Balance API error:', error)
+
+      // If it's a timeout or network error, provide a more specific error
+      if (error.message?.includes('timeout') || error.code === 'NETWORK_ERROR') {
+        throw new Error('Network timeout - please check your connection and try again')
+      }
+
       throw error
     }
   }
