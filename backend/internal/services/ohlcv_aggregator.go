@@ -696,18 +696,13 @@ func (a *OHLCVAggregator) cleanupOldData() error {
 	}
 
 	// Delete old data
-	result, err := a.store.DeleteOldMarketPriceHistory(a.ctx, cutoff)
+	rowsAffected, err := a.store.DeleteOldMarketPriceHistory(a.ctx, cutoff)
 	if err != nil {
 		return fmt.Errorf("failed to delete old market price history: %w", err)
 	}
 
 	// Log the cleanup
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		a.logger.Info("🧹 cleaned up old OHLCV data",
-			"cutoff_date", cutoffTime.Format("2006-01-02"),
-			"error_getting_rows_affected", err)
-	} else if rowsAffected > 0 {
+	if rowsAffected > 0 {
 		a.logger.Info("🧹 cleaned up old OHLCV data",
 			"cutoff_date", cutoffTime.Format("2006-01-02"),
 			"records_deleted", rowsAffected)
