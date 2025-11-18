@@ -146,27 +146,19 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	// Calculate the start time for this bar based on resolution
 	barStartTime := a.getBarStartTime(timestamp, resolution)
 
-	// Log timestamp details for first few updates to debug date issues
-	now := time.Now().UTC()
-	if a.totalUpdates <= 10 {
-		a.logger.Info("🔍 timestamp flow in aggregator",
+	// Log basic timestamp info only for first few updates
+	if a.totalUpdates <= 5 {
+		a.logger.Info("🔍 timestamp basics",
 			"update", a.totalUpdates,
 			"market_id", marketID,
 			"resolution", resolution,
-			"input_timestamp", timestamp.Format(time.RFC3339),
-			"input_timestamp_date", timestamp.Format("2006-01-02"),
-			"input_timestamp_unix", timestamp.Unix(),
-			"bar_start_time", barStartTime.Format(time.RFC3339),
-			"bar_start_time_date", barStartTime.Format("2006-01-02"),
-			"bar_start_time_unix", barStartTime.Unix(),
-			"current_time_utc", now.Format(time.RFC3339),
-			"current_time_date", now.Format("2006-01-02"),
-			"diff_from_now", now.Sub(timestamp),
-			"bar_date_matches_current", barStartTime.Format("2006-01-02") == now.Format("2006-01-02"))
+			"input_timestamp", timestamp.Format("2006-01-02 15:04:05"),
+			"bar_start_time", barStartTime.Format("2006-01-02 15:04:05"))
 	}
-	
+
 	// Additional validation: if the bar start time is more than 1 day old, log a warning
 	// This helps catch cases where stale timestamps are creating bars with old dates
+	now := time.Now().UTC()
 	barDateDiff := now.Sub(barStartTime)
 	if barDateDiff > 24*time.Hour && a.totalUpdates <= 20 {
 		a.logger.Warn("⚠️  bar start time is more than 1 day old",
@@ -202,15 +194,17 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
-		barEndTime := a.getBarEndTime(barStartTime, resolution)
-		a.logger.Info("🆕 created new OHLCV bar", 
-			"market_id", marketID, 
-			"resolution", resolution,
-			"start_time", barStartTime,
-			"start_time_rfc3339", barStartTime.Format(time.RFC3339),
-			"start_time_date", barStartTime.Format("2006-01-02"),
-			"end_time", barEndTime,
-			"initial_price", price)
+
+		// Log new bar creation only for first few bars per resolution type
+		if a.totalBarsSaved < 10 {
+			barEndTime := a.getBarEndTime(barStartTime, resolution)
+			a.logger.Info("🆕 created new OHLCV bar",
+				"market_id", marketID,
+				"resolution", resolution,
+				"start_time", barStartTime.Format("2006-01-02 15:04:05"),
+				"end_time", barEndTime.Format("2006-01-02 15:04:05"),
+				"initial_price", price)
+		}
 	}
 
 	// Update the bar with the new price and accumulate volume
@@ -256,17 +250,7 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		return err
 	}
 	
-	// Log the exact pgtype.Timestamptz value being sent to the database
-	// This helps debug timezone issues
-	a.logger.Info("🔍 timestamp conversion details",
-		"original_time", bar.StartTime.Format(time.RFC3339),
-		"utc_time", utcTime.Format(time.RFC3339),
-		"utc_time_unix", utcTime.Unix(),
-		"pgtype_valid", timeVal.Valid,
-		"pgtype_time", timeVal.Time.Format(time.RFC3339),
-		"pgtype_time_unix", timeVal.Time.Unix(),
-		"pgtype_infinity", timeVal.InfinityModifier,
-		"pgtype_time_utc", timeVal.Time.UTC().Format(time.RFC3339))
+	// Log timestamp conversion only on errors (removed verbose logging)
 
 	// Helper function to convert float64 to pgtype.Numeric
 	// pgtype.Numeric.Scan() doesn't accept float64 directly, so we convert to string first
@@ -314,19 +298,7 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		PResolution: bar.Resolution,
 	}
 
-	// Log the insert attempt with full details, including UTC timestamp
-	a.logger.Debug("attempting to insert OHLCV bar",
-		"market_id", bar.MarketID,
-		"resolution", bar.Resolution,
-		"start_time_original", bar.StartTime,
-		"start_time_utc", utcTime,
-		"start_time_rfc3339", utcTime.Format(time.RFC3339),
-		"start_time_unix", utcTime.Unix(),
-		"time_valid", timeVal.Valid,
-		"open", bar.Open,
-		"high", bar.High,
-		"low", bar.Low,
-		"close", bar.Close)
+	// Removed verbose insert attempt logging
 
 	if err := a.store.InsertMarketPriceHistory(a.ctx, arg); err != nil {
 		// Log detailed error information
@@ -346,17 +318,14 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		return fmt.Errorf("database insert failed: %w", err)
 	}
 
-	// Verify the insert by querying the database
-	// This helps catch cases where the insert appears to succeed but data isn't actually saved
+	// Simplified verification - only log on errors
 	verifyCtx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
 	defer cancel()
-	
-	// Use a small time range around the bar's start time for verification
-	// The SQL query uses time >= $2 AND time <= $3, so we need a range
+
 	var verifyTimeStart, verifyTimeEnd pgtype.Timestamptz
 	verifyTimeStart.Scan(utcTime.Add(-1 * time.Second))
 	verifyTimeEnd.Scan(utcTime.Add(1 * time.Second))
-	
+
 	verifyParams := db.GetMarketPriceHistoryParams{
 		MarketID:   bar.MarketID,
 		Time:       verifyTimeStart,
@@ -365,88 +334,19 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	}
 	verifyResults, verifyErr := a.store.GetMarketPriceHistory(verifyCtx, verifyParams)
 	if verifyErr != nil {
-		a.logger.Warn("⚠️  insert succeeded but verification query failed",
-			"error", verifyErr,
-			"market_id", bar.MarketID,
-			"resolution", bar.Resolution,
-			"start_time_utc", utcTime,
-			"start_time_rfc3339", utcTime.Format(time.RFC3339))
+		a.logger.Warn("⚠️  insert verification failed", "error", verifyErr, "market_id", bar.MarketID)
 	} else if len(verifyResults) == 0 {
-		a.logger.Error("❌ insert appeared to succeed but data not found in database",
-			"market_id", bar.MarketID,
-			"resolution", bar.Resolution,
-			"start_time_utc", utcTime,
-			"start_time_rfc3339", utcTime.Format(time.RFC3339),
-			"issue", "data_not_found_after_insert")
-	} else {
-		// Successfully verified - log what was actually stored in the database
-		storedTime := verifyResults[0].Time
-		if storedTime.Valid {
-			storedTimeUTC := storedTime.Time.UTC()
-			storedDate := storedTimeUTC.Format("2006-01-02")
-			sentDate := utcTime.Format("2006-01-02")
-			datesMatch := storedDate == sentDate
-			
-			a.logger.Info("✅ verified insert - comparing stored vs sent",
-				"market_id", bar.MarketID,
-				"resolution", bar.Resolution,
-				"sent_time_utc", utcTime.Format(time.RFC3339),
-				"sent_time_date", sentDate,
-				"stored_time_utc", storedTimeUTC.Format(time.RFC3339),
-				"stored_time_date", storedDate,
-				"stored_time_unix", storedTimeUTC.Unix(),
-				"dates_match", datesMatch,
-				"time_diff", storedTimeUTC.Sub(utcTime))
-			
-			if !datesMatch {
-				a.logger.Error("❌ DATE MISMATCH: stored date differs from sent date",
-					"sent_date", sentDate,
-					"stored_date", storedDate,
-					"sent_time", utcTime.Format(time.RFC3339),
-					"stored_time", storedTimeUTC.Format(time.RFC3339),
-					"market_id", bar.MarketID,
-					"resolution", bar.Resolution)
-			}
-		} else {
-			a.logger.Warn("⚠️  stored timestamp is invalid",
-				"market_id", bar.MarketID,
-				"resolution", bar.Resolution)
-		}
+		a.logger.Error("❌ insert succeeded but data not found", "market_id", bar.MarketID, "resolution", bar.Resolution)
 	}
 
 	a.totalBarsSaved++
-	
-	// Log the date being saved to help debug timestamp issues
-	currentDate := time.Now().UTC().Format("2006-01-02")
-	savedDate := utcTime.Format("2006-01-02")
-	dateMatches := savedDate == currentDate
-	
-	a.logger.Info("✅ OHLCV bar saved to database", 
-		"market_id", bar.MarketID, 
+
+	// Log successful bar save (simplified)
+	a.logger.Info("✅ OHLCV bar saved",
+		"market_id", bar.MarketID,
 		"resolution", bar.Resolution,
-		"start_time_utc", utcTime,
-		"start_time_rfc3339", utcTime.Format(time.RFC3339),
-		"start_time_date", savedDate,
-		"start_time_unix", utcTime.Unix(),
-		"current_date", currentDate,
-		"date_matches_current", dateMatches,
-		"open", bar.Open,
-		"high", bar.High,
-		"low", bar.Low,
-		"close", bar.Close,
-		"updates", bar.Count,
-		"total_saved", a.totalBarsSaved,
-		"verified", len(verifyResults) > 0)
-	
-	// Warn if the date doesn't match current date
-	if !dateMatches {
-		a.logger.Warn("⚠️  saved bar date does not match current date",
-			"saved_date", savedDate,
-			"current_date", currentDate,
-			"market_id", bar.MarketID,
-			"resolution", bar.Resolution,
-			"start_time_utc", utcTime.Format(time.RFC3339))
-	}
+		"start_time", utcTime.Format("2006-01-02 15:04:05"),
+		"total_saved", a.totalBarsSaved)
 	
 	return nil
 }
@@ -658,35 +558,32 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 	}
 	a.mu.Unlock()
 
-	// Log periodic flush activity
-	if totalBarsChecked > 0 || len(barsToSave) > 0 {
-		a.logger.Info("🔄 periodic flush check", 
-			"bars_checked", totalBarsChecked,
-			"bars_to_save", len(barsToSave),
-			"now", now.Format(time.RFC3339))
+	// Log periodic flush activity only when bars are saved
+	if len(barsToSave) > 0 {
+		a.logger.Info("🔄 periodic flush",
+			"bars_saved", len(barsToSave),
+			"total_active", totalBarsChecked)
 	}
 
 	// Second pass: save completed bars (outside the lock to avoid holding it during DB operations)
 	if len(barsToSave) > 0 {
 		a.logger.Info("💾 flushing completed bars", "count", len(barsToSave))
+		saveErrors := 0
 		for _, bar := range barsToSave {
-			barEndTime := a.getBarEndTime(bar.StartTime, bar.Resolution)
 			if err := a.saveBar(bar); err != nil {
-				a.logger.Error("failed to flush completed bar", 
-					"error", err, 
-					"market_id", bar.MarketID, 
-					"resolution", bar.Resolution,
-					"start_time", bar.StartTime,
-					"end_time", barEndTime,
-					"now", now)
-			} else {
-				a.logger.Info("✅ flushed completed bar",
+				saveErrors++
+				a.logger.Error("failed to flush bar",
+					"error", err,
 					"market_id", bar.MarketID,
-					"resolution", bar.Resolution,
-					"start_time", bar.StartTime,
-					"end_time", barEndTime,
-					"updates_in_bar", bar.Count)
+					"resolution", bar.Resolution)
 			}
+		}
+		if saveErrors == 0 {
+			a.logger.Info("✅ flush completed successfully", "bars_flushed", len(barsToSave))
+		} else {
+			a.logger.Warn("⚠️  flush completed with errors",
+				"bars_flushed", len(barsToSave)-saveErrors,
+				"errors", saveErrors)
 		}
 
 		// Third pass: remove saved bars from memory
