@@ -195,6 +195,15 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
         invertScale: false,
       })
 
+      // Format price labels as percentages using the chart's price formatter
+      chartRef.current.applyOptions({
+        localization: {
+          priceFormatter: (price: number) => {
+            return price.toFixed(1) + '%'
+          },
+        },
+      })
+
       // Load historical data
       const loadHistoricalData = async () => {
         try {

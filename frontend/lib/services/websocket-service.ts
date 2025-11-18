@@ -29,9 +29,9 @@ class WebSocketService {
   private static instance: WebSocketService
   private ws: WebSocket | null = null
   private connectionUrl: string | null = null
-  private reconnectInterval = 5000 // Reconnect every 5 seconds
+  private reconnectInterval = 10000 // Reconnect every 10 seconds
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
-  private subscriptions: Set<string> = new Set()
+  private subscriptions: Map<string, number> = new Map() // marketId -> subscription count
 
   // Private constructor to enforce the singleton pattern.
   private constructor() {}
@@ -93,11 +93,15 @@ class WebSocketService {
    * @param {string} marketId - The ID of the market to subscribe to.
    */
   public subscribe(marketId: string): void {
-    console.log('[WebSocket] Subscribing to market:', marketId, 'Current subscriptions:', Array.from(this.subscriptions))
-    this.subscriptions.add(marketId)
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const currentCount = this.subscriptions.get(marketId) || 0
+    this.subscriptions.set(marketId, currentCount + 1)
+
+    console.log('[WebSocket] Subscribing to market:', marketId, 'New count:', currentCount + 1, 'All subscriptions:', Object.fromEntries(this.subscriptions))
+
+    // Only send subscription if this is the first subscriber for this market
+    if (currentCount === 0 && this.ws?.readyState === WebSocket.OPEN) {
       this.sendSubscriptionMessage([marketId], 'subscribe')
-    } else {
+    } else if (currentCount === 0) {
       console.log('[WebSocket] WebSocket not open yet, subscription will be sent on connect. ReadyState:', this.ws?.readyState)
     }
   }
@@ -107,9 +111,16 @@ class WebSocketService {
    * @param {string} marketId - The ID of the market to unsubscribe from.
    */
   public unsubscribe(marketId: string): void {
-    this.subscriptions.delete(marketId)
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.sendSubscriptionMessage([marketId], 'unsubscribe')
+    const currentCount = this.subscriptions.get(marketId) || 0
+    if (currentCount > 1) {
+      this.subscriptions.set(marketId, currentCount - 1)
+      console.log('[WebSocket] Reduced subscription count for market:', marketId, 'New count:', currentCount - 1)
+    } else {
+      this.subscriptions.delete(marketId)
+      console.log('[WebSocket] Unsubscribed from market:', marketId)
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.sendSubscriptionMessage([marketId], 'unsubscribe')
+      }
     }
   }
 
@@ -121,8 +132,15 @@ class WebSocketService {
     // This prevents the "Still in CONNECTING state" error
     requestAnimationFrame(() => {
       // Double-check readyState before sending
-      if (this.ws?.readyState === WebSocket.OPEN && this.subscriptions.size > 0) {
-        this.sendSubscriptionMessage(Array.from(this.subscriptions), 'subscribe')
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        // Get all markets with active subscriptions (count > 0)
+        const activeSubscriptions = Array.from(this.subscriptions.entries())
+          .filter(([_, count]) => count > 0)
+          .map(([marketId, _]) => marketId)
+
+        if (activeSubscriptions.length > 0) {
+          this.sendSubscriptionMessage(activeSubscriptions, 'subscribe')
+        }
       }
     })
   }
@@ -156,6 +174,14 @@ class WebSocketService {
           })
 
           if (message.event_type === 'book' && message.market) {
+            console.log('[WebSocket] Processing book message:', {
+              market: message.market,
+              asset_id: message.asset_id,
+              bidsCount: message.bids?.length || 0,
+              asksCount: message.asks?.length || 0,
+              timestamp: message.timestamp
+            })
+
             // Update the Zustand store with the new order book data.
             useMarketStore.getState().setOrderBook(message.market, message)
             console.log('[WebSocket] Updated store for market:', message.market)

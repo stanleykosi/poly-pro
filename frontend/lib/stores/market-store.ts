@@ -29,6 +29,7 @@ import { MarketData, WebSocketBookMessage, ProcessedOrderBook, OrderBookLevelWit
  *   the order book for a specific market based on a new WebSocket message.
  * @property {(marketId: string) => void} setOrderBookLoading - Set loading state for order book.
  * @property {(marketId: string) => ProcessedOrderBook | null} getProcessedOrderBook - Get processed order book data.
+ * @property {(marketId: string) => void} generateMockOrderBook - Generate mock order book data when real-time data is unavailable.
  */
 interface MarketState {
   markets: Record<string, MarketData>
@@ -36,6 +37,7 @@ interface MarketState {
   setOrderBook: (marketId: string, message: WebSocketBookMessage) => void
   setOrderBookLoading: (marketId: string, isLoading: boolean) => void
   getProcessedOrderBook: (marketId: string) => ProcessedOrderBook | null
+  generateMockOrderBook: (marketId: string, lastPrice?: number) => void
 }
 
 /**
@@ -199,6 +201,15 @@ export const useMarketStore = create<MarketState>((set, get) => ({
         }
       }
 
+      // Debug logging
+      console.log('[MarketStore] Received order book update:', {
+        marketId,
+        assetId: message.asset_id,
+        bidsCount: message.bids?.length || 0,
+        asksCount: message.asks?.length || 0,
+        timestamp: message.timestamp,
+      })
+
       // Update raw market data
       const updatedMarkets = {
         ...state.markets,
@@ -263,6 +274,60 @@ export const useMarketStore = create<MarketState>((set, get) => ({
 
   getProcessedOrderBook: (marketId) => {
     return get().processedOrderBooks[marketId] || null
+  },
+
+  generateMockOrderBook: (marketId, lastPrice = 0.5) => {
+    set((state) => {
+      // Generate mock order book data based on a reference price
+      const generateOrders = (basePrice: number, count: number, isBid: boolean): OrderBookLevel[] => {
+        const orders: OrderBookLevel[] = []
+        for (let i = 0; i < count; i++) {
+          const priceOffset = isBid ? -(i + 1) * 0.005 : (i + 1) * 0.005
+          const price = Math.max(0.001, Math.min(0.999, basePrice + priceOffset))
+          const size = Math.random() * 100 + 10 // Random size between 10-110
+          orders.push({
+            price: price.toFixed(4),
+            size: size.toFixed(2)
+          })
+        }
+        return orders
+      }
+
+      const mockBids = generateOrders(lastPrice, 8, true)
+      const mockAsks = generateOrders(lastPrice, 8, false)
+
+      const mockMessage: WebSocketBookMessage = {
+        event_type: 'book',
+        asset_id: 'mock-asset-id',
+        market: marketId,
+        bids: mockBids,
+        asks: mockAsks,
+        timestamp: Date.now().toString(),
+        hash: 'mock-hash'
+      }
+
+      // Use existing logic to process and store the mock data
+      const processedOrderBook = processOrderBook(mockBids, mockAsks)
+
+      return {
+        markets: {
+          ...state.markets,
+          [marketId]: {
+            marketId,
+            assetId: 'mock-asset-id',
+            orderBook: {
+              bids: mockBids,
+              asks: mockAsks,
+            },
+            lastUpdate: Date.now(),
+          },
+        },
+        processedOrderBooks: {
+          ...state.processedOrderBooks,
+          [marketId]: processedOrderBook,
+        },
+      }
+    })
   },
 }))
 

@@ -355,19 +355,27 @@ export default function PlaceOrderForm({
     return 'secondary' // Orange for sell
   }, [side])
 
-  // Market price display
+  // Market price display - differentiate YES/NO shares
   const marketPriceDisplay = useMemo(() => {
     if (orderType === 'MARKET') {
-      if (side === 'BUY_YES' || side === 'BUY_NO') {
+      if (side === 'BUY_YES') {
+        // For YES shares, use the ask price (what you pay to buy YES)
         if (bestAsk !== null) {
           return '$' + bestAsk.toFixed(2)
         }
-        return null
+      } else if (side === 'BUY_NO') {
+        // For NO shares, in a real implementation this would be the price of NO tokens
+        // For now, we'll use a derived price: if YES is at price P, NO should be at price (1-P)
+        // But since we only have one order book, we'll simulate this
+        if (bestAsk !== null) {
+          const noPrice = Math.max(0.001, Math.min(0.999, 1 - bestAsk))
+          return '$' + noPrice.toFixed(2)
+        }
       } else {
+        // For selling, use the bid price (what you get when selling)
         if (bestBid !== null) {
           return '$' + bestBid.toFixed(2)
         }
-        return null
       }
     }
     return null

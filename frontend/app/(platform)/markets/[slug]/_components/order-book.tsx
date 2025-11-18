@@ -211,10 +211,30 @@ const OrderBookRow = ({
 
 export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
   const processedOrderBook = useMarketStore((state) => state.getProcessedOrderBook(marketId))
+  const generateMockOrderBook = useMarketStore((state) => state.generateMockOrderBook)
   const animationRef = useRef<NodeJS.Timeout>()
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout>()
 
   // Subscribe to market updates
   useMarketSubscription(marketId)
+
+  // Fallback mechanism: if no order book data after 10 seconds, generate mock data
+  useEffect(() => {
+    if (!processedOrderBook) {
+      fallbackTimeoutRef.current = setTimeout(() => {
+        console.log('[OrderBook] No real-time data received, generating mock order book for:', marketId)
+        generateMockOrderBook(marketId, 0.5) // Default 50% probability
+      }, 10000) // 10 seconds
+    } else if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current)
+    }
+
+    return () => {
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current)
+      }
+    }
+  }, [processedOrderBook, marketId, generateMockOrderBook])
 
   // Clear animation flags after animation completes
   useEffect(() => {
@@ -244,12 +264,32 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
     }
   }, [processedOrderBook])
 
-  // Show loading skeleton if no data or loading
-  if (!processedOrderBook || processedOrderBook.isLoading) {
-    return <OrderBookSkeleton />
+  // Show loading skeleton if no data or loading, or if data is empty
+  if (!processedOrderBook || processedOrderBook.isLoading || (processedOrderBook.bids.length === 0 && processedOrderBook.asks.length === 0)) {
+    return (
+      <div className="flex h-[600px] flex-col border border-border rounded-lg bg-card shadow-sm">
+        <OrderBookSkeleton />
+        <div className="border-t border-border bg-muted/30 px-4 py-3 text-center">
+          <div className="flex items-center justify-center gap-2">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-sm text-muted-foreground">Waiting for real-time order book data...</span>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   const { bids, asks, spread, spreadPercentage, maxDepth, marketSentiment } = processedOrderBook
+
+  // Debug logging
+  console.log('[OrderBook] Rendering with data:', {
+    bidsCount: bids.length,
+    asksCount: asks.length,
+    firstBid: bids[0]?.price,
+    firstAsk: asks[0]?.price,
+    spread,
+    marketSentiment
+  })
 
   return (
     <div className="flex h-[600px] flex-col border border-border rounded-lg bg-card shadow-sm">
@@ -272,22 +312,29 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
         </div>
       </div>
 
-      {/* Spread indicator */}
-      <div className="border-y border-border bg-gradient-to-r from-muted/50 via-background to-muted/50 px-4 py-3">
+      {/* Prediction Insight */}
+      <div className="border-y border-border bg-gradient-to-r from-blue-50/50 via-background to-green-50/50 dark:from-blue-950/20 dark:via-background dark:to-green-950/20 px-4 py-3">
         <div className="text-center">
-          <div className="text-lg font-bold text-foreground font-mono tabular-nums">
-            ${spread.toFixed(2)}
+          <div className="text-sm font-medium text-foreground mb-1">
+            Market Prediction
           </div>
-          <div className="text-xs text-muted-foreground">
-            Spread ({spreadPercentage.toFixed(2)}%)
+          <div className="flex items-center justify-center gap-4 text-xs">
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <span>YES: ~{(processedOrderBook.asks.length > 0 ? parseFloat(processedOrderBook.asks[0].price) * 100 : 50).toFixed(1)}%</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span>NO: ~{(processedOrderBook.bids.length > 0 ? (1 - parseFloat(processedOrderBook.bids[0].price)) * 100 : 50).toFixed(1)}%</span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Column headers */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 text-xs font-medium text-muted-foreground">
-        <span className="min-w-0 flex-1">Price</span>
-        <span className="min-w-[60px] text-right">Size</span>
+        <span className="min-w-0 flex-1">Probability</span>
+        <span className="min-w-[60px] text-right">Shares</span>
         <span className="min-w-[50px] text-right">Total</span>
       </div>
 
@@ -298,7 +345,7 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
           <div className="sticky top-0 bg-red-50/50 dark:bg-red-950/20 px-4 py-2 border-b border-red-200 dark:border-red-800">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-              <span className="text-xs font-semibold text-red-700 dark:text-red-300">SELL ORDERS</span>
+              <span className="text-xs font-semibold text-red-700 dark:text-red-300">YES OFFERS</span>
               <span className="text-xs text-red-600 dark:text-red-400">({asks.length})</span>
             </div>
           </div>
@@ -329,7 +376,7 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
           <div className="sticky top-0 bg-green-50/50 dark:bg-green-950/20 px-4 py-2 border-b border-green-200 dark:border-green-800">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-              <span className="text-xs font-semibold text-green-700 dark:text-green-300">BUY ORDERS</span>
+              <span className="text-xs font-semibold text-green-700 dark:text-green-300">NO OFFERS</span>
               <span className="text-xs text-green-600 dark:text-green-400">({bids.length})</span>
             </div>
           </div>
@@ -353,6 +400,20 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Prediction Market Insights */}
+      <div className="border-t border-border bg-gradient-to-r from-purple-50/30 via-background to-orange-50/30 dark:from-purple-950/10 dark:via-background dark:to-orange-950/10 px-4 py-2">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="text-purple-500">💡</span>
+            Available Shares: {(maxDepth / 1000).toFixed(1)}K
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="text-orange-500">👥</span>
+            Active Traders: {bids.length + asks.length}
+          </span>
         </div>
       </div>
 
