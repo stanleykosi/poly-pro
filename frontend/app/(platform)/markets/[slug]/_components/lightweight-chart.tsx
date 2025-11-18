@@ -127,12 +127,6 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
             bottom: 0.1,
           },
         },
-        // Configure for Polymarket probability prices (0-1 range)
-        priceScale: {
-          autoScale: true,
-          mode: 0, // Normal mode
-          invertScale: false,
-        },
       })
 
       // Verify chart was created successfully
@@ -193,6 +187,13 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
       }
 
       seriesRef.current = candlestickSeries
+
+      // Configure price scale for Polymarket probability prices (0-100% range)
+      candlestickSeries.priceScale().applyOptions({
+        autoScale: true,
+        mode: 0, // Normal mode
+        invertScale: false,
+      })
 
       // Load historical data
       const loadHistoricalData = async () => {
