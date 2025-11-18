@@ -501,10 +501,10 @@ export default function PlaceOrderForm({
         {/* Position Info for Sell Orders */}
         {side === 'SELL' && (
           <div className={`mt-4 rounded-lg border p-3 ${hasPositions
-              ? 'border-blue-200 bg-blue-50'
-              : positionsLoading
-                ? 'border-gray-200 bg-gray-50'
-                : 'border-orange-200 bg-orange-50'
+            ? 'border-blue-200 bg-blue-50'
+            : positionsLoading
+              ? 'border-gray-200 bg-gray-50'
+              : 'border-orange-200 bg-orange-50'
             }`}>
             <div className="flex items-start">
               <div className="flex-shrink-0">
