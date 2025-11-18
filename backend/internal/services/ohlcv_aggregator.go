@@ -101,7 +101,7 @@ func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Queri
 
 // UpdatePrice processes a price update for a market and updates the current bar.
 // It extracts the mid-price from the order book (average of best bid and ask).
-func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp time.Time) error {
+func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, volume float64, timestamp time.Time) error {
 	a.totalUpdates++
 
 	// Log first few updates to confirm function is being called
@@ -109,7 +109,8 @@ func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp 
 		a.logger.Info("OHLCV aggregator: processing price update",
 			"update", a.totalUpdates,
 			"market_id", marketID,
-			"price", price)
+			"price", price,
+			"volume", volume)
 	}
 
 	// Periodic cleanup: run cleanup every 24 hours to prevent old data accumulation
@@ -123,7 +124,7 @@ func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp 
 	resolutions := []string{"15", "D"}
 
 	for _, resolution := range resolutions {
-		if err := a.updateBarForResolution(marketID, resolution, price, timestamp); err != nil {
+		if err := a.updateBarForResolution(marketID, resolution, price, volume, timestamp); err != nil {
 			a.logger.Error("failed to update bar", "market_id", marketID, "resolution", resolution, "error", err)
 			return err
 		}
@@ -133,7 +134,7 @@ func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp 
 }
 
 // updateBarForResolution updates the bar for a specific market and resolution.
-func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution string, price float64, timestamp time.Time) error {
+func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution string, price float64, volume float64, timestamp time.Time) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -197,7 +198,7 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			High:       price,
 			Low:        price,
 			Close:      price,
-			Volume:     0, // Volume would need to come from trade data
+			Volume:     volume, // Initialize with the first volume update
 			Count:      0,
 		}
 		a.bars[marketID][resolution] = bar
@@ -212,7 +213,7 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			"initial_price", price)
 	}
 
-	// Update the bar with the new price
+	// Update the bar with the new price and accumulate volume
 	bar.Close = price
 	if price > bar.High {
 		bar.High = price
@@ -220,6 +221,7 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	if price < bar.Low {
 		bar.Low = price
 	}
+	bar.Volume += volume // Accumulate volume
 	bar.Count++
 
 	// No need to log every update - too verbose
@@ -497,6 +499,7 @@ func ExtractMidPrice(bids []interface{}, asks []interface{}) float64 {
 		}
 	}
 
+
 	// Calculate mid-price
 	if hasBid && hasAsk {
 		return (bestBid + bestAsk) / 2.0
@@ -507,6 +510,36 @@ func ExtractMidPrice(bids []interface{}, asks []interface{}) float64 {
 	}
 
 	return 0
+}
+
+// ExtractVolume extracts volume from order book data (sum of sizes from bids and asks).
+// This provides a proxy for market liquidity/volume based on available order sizes.
+func ExtractVolume(bids []interface{}, asks []interface{}) float64 {
+	var totalVolume float64
+
+	// Sum sizes from bids
+	for _, bidInterface := range bids {
+		if bidMap, ok := bidInterface.(map[string]interface{}); ok {
+			if sizeStr, ok := bidMap["size"].(string); ok {
+				if size, err := parseFloat(sizeStr); err == nil {
+					totalVolume += size
+				}
+			}
+		}
+	}
+
+	// Sum sizes from asks
+	for _, askInterface := range asks {
+		if askMap, ok := askInterface.(map[string]interface{}); ok {
+			if sizeStr, ok := askMap["size"].(string); ok {
+				if size, err := parseFloat(sizeStr); err == nil {
+					totalVolume += size
+				}
+			}
+		}
+	}
+
+	return totalVolume
 }
 
 // parseFloat is a helper to parse string to float64.

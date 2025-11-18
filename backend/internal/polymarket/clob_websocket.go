@@ -77,13 +77,35 @@ type BookMessage struct {
 	Hash      string        `json:"hash"`
 }
 
+// PriceChange represents an individual price change within a price_change event
+type PriceChange struct {
+	AssetID string `json:"asset_id"`
+	Price   string `json:"price"`
+	Size    string `json:"size"`
+	Side    string `json:"side"`
+	Hash    string `json:"hash"`
+	BestBid string `json:"best_bid"`
+	BestAsk string `json:"best_ask"`
+}
+
 // PriceChangeMessage represents a price change event
 type PriceChangeMessage struct {
-	EventType string `json:"event_type"` // "price_change"
-	AssetID   string `json:"asset_id"`
-	Market    string `json:"market"`
-	Price     string `json:"price"` // New price
-	Timestamp string `json:"timestamp"`
+	EventType    string        `json:"event_type"` // "price_change"
+	Market       string        `json:"market"`
+	PriceChanges []PriceChange `json:"price_changes"`
+	Timestamp    string        `json:"timestamp"`
+}
+
+// LastTradePriceMessage represents a trade execution event
+type LastTradePriceMessage struct {
+	EventType  string `json:"event_type"` // "last_trade_price"
+	AssetID    string `json:"asset_id"`
+	Market     string `json:"market"`
+	Price      string `json:"price"`
+	Side       string `json:"side"`
+	Size       string `json:"size"`        // Trade volume/size
+	FeeRateBps string `json:"fee_rate_bps"`
+	Timestamp  string `json:"timestamp"`
 }
 
 // SubscriptionMessage represents a subscription request
@@ -216,26 +238,70 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			if err := json.Unmarshal(message, &priceChangeMsg); err == nil && priceChangeMsg.EventType == "price_change" {
 				// Successfully parsed as price change event
 				if messageCount == 1 {
-					c.logger.Info("WebSocket: parsed price_change event", "market", priceChangeMsg.Market)
+					c.logger.Info("WebSocket: parsed price_change event", "market", priceChangeMsg.Market, "changes_count", len(priceChangeMsg.PriceChanges))
 				}
-				// Convert price_change to a book message with synthetic bids/asks
-				// Use the price as both best bid and best ask for OHLCV aggregation
-				price := priceChangeMsg.Price
+				// Process each price change in the array
+				for _, change := range priceChangeMsg.PriceChanges {
+					// Convert price_change to a book message with best bid/ask from the change
+					// Use best_bid and best_ask to create proper order book levels
+					var bids []OrderLevel
+					var asks []OrderLevel
+
+					// Add best bid if it's valid
+					if change.BestBid != "" && change.BestBid != "0" {
+						bids = append(bids, OrderLevel{Price: change.BestBid, Size: "100"}) // Use dummy size
+					}
+
+					// Add best ask if it's valid
+					if change.BestAsk != "" && change.BestAsk != "0" {
+						asks = append(asks, OrderLevel{Price: change.BestAsk, Size: "100"}) // Use dummy size
+					}
+
+					// Only create book message if we have valid bids or asks
+					if len(bids) > 0 || len(asks) > 0 {
+						syntheticBookMsg := BookMessage{
+							EventType: "book",
+							AssetID:   change.AssetID,
+							Market:    priceChangeMsg.Market,
+							Bids:      bids,
+							Asks:      asks,
+							Timestamp: priceChangeMsg.Timestamp,
+							Hash:      change.Hash,
+						}
+						if err := handler(&syntheticBookMsg); err != nil {
+							c.logger.Error("error handling price_change converted to book message", "error", err, "asset_id", change.AssetID)
+						}
+					}
+				}
+				continue
+			}
+
+			// Try to parse as last_trade_price event
+			var tradeMsg LastTradePriceMessage
+			if err := json.Unmarshal(message, &tradeMsg); err == nil && tradeMsg.EventType == "last_trade_price" {
+				// Successfully parsed as trade event
+				if messageCount == 1 {
+					c.logger.Info("WebSocket: parsed last_trade_price event", "market", tradeMsg.Market)
+				}
+				// Convert trade to a book message for OHLCV aggregation with volume
+				// Use the trade price as both bid and ask, and trade size as volume
+				price := tradeMsg.Price
+				size := tradeMsg.Size
 				syntheticBookMsg := BookMessage{
 					EventType: "book",
-					AssetID:   priceChangeMsg.AssetID,
-					Market:    priceChangeMsg.Market,
+					AssetID:   tradeMsg.AssetID,
+					Market:    tradeMsg.Market,
 					Bids: []OrderLevel{
-						{Price: price, Size: "0"},
+						{Price: price, Size: size}, // Use actual trade size for volume tracking
 					},
 					Asks: []OrderLevel{
-						{Price: price, Size: "0"},
+						{Price: price, Size: size}, // Use actual trade size for volume tracking
 					},
-					Timestamp: priceChangeMsg.Timestamp,
+					Timestamp: tradeMsg.Timestamp,
 					Hash:      "",
 				}
 				if err := handler(&syntheticBookMsg); err != nil {
-					c.logger.Error("error handling price_change converted to book message", "error", err)
+					c.logger.Error("error handling last_trade_price converted to book message", "error", err)
 				}
 				continue
 			}
@@ -260,25 +326,68 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 					var priceChangeMsg PriceChangeMessage
 					if err := json.Unmarshal(wsMsg.Data, &priceChangeMsg); err == nil {
 						if messageCount == 1 {
-							c.logger.Info("WebSocket: parsed wrapped price_change", "market", priceChangeMsg.Market)
+							c.logger.Info("WebSocket: parsed wrapped price_change", "market", priceChangeMsg.Market, "changes_count", len(priceChangeMsg.PriceChanges))
 						}
-						// Convert price_change to a book message with synthetic bids/asks
-						price := priceChangeMsg.Price
+						// Process each price change in the array
+						for _, change := range priceChangeMsg.PriceChanges {
+							// Convert price_change to a book message with best bid/ask from the change
+							var bids []OrderLevel
+							var asks []OrderLevel
+
+							// Add best bid if it's valid
+							if change.BestBid != "" && change.BestBid != "0" {
+								bids = append(bids, OrderLevel{Price: change.BestBid, Size: "100"})
+							}
+
+							// Add best ask if it's valid
+							if change.BestAsk != "" && change.BestAsk != "0" {
+								asks = append(asks, OrderLevel{Price: change.BestAsk, Size: "100"})
+							}
+
+							// Only create book message if we have valid bids or asks
+							if len(bids) > 0 || len(asks) > 0 {
+								syntheticBookMsg := BookMessage{
+									EventType: "book",
+									AssetID:   change.AssetID,
+									Market:    priceChangeMsg.Market,
+									Bids:      bids,
+									Asks:      asks,
+									Timestamp: priceChangeMsg.Timestamp,
+									Hash:      change.Hash,
+								}
+								if err := handler(&syntheticBookMsg); err != nil {
+									c.logger.Error("error handling wrapped price_change converted to book message", "error", err, "asset_id", change.AssetID)
+								}
+							}
+						}
+						continue
+					}
+				}
+				// Check if it's a last_trade_price event in the wrapper
+				if wsMsg.EventType == "last_trade_price" {
+					var tradeMsg LastTradePriceMessage
+					if err := json.Unmarshal(wsMsg.Data, &tradeMsg); err == nil {
+						if messageCount == 1 {
+							c.logger.Info("WebSocket: parsed wrapped last_trade_price", "market", tradeMsg.Market)
+						}
+						// Convert trade to a book message for OHLCV aggregation with volume
+						price := tradeMsg.Price
+						size := tradeMsg.Size
 						syntheticBookMsg := BookMessage{
 							EventType: "book",
-							AssetID:   priceChangeMsg.AssetID,
-							Market:    priceChangeMsg.Market,
+							AssetID:   tradeMsg.AssetID,
+							Market:    tradeMsg.Market,
 							Bids: []OrderLevel{
-								{Price: price, Size: "0"},
+								{Price: price, Size: size}, // Use actual trade size for volume tracking
 							},
 							Asks: []OrderLevel{
-								{Price: price, Size: "0"},
+								{Price: price, Size: size}, // Use actual trade size for volume tracking
 							},
-							Timestamp: priceChangeMsg.Timestamp,
+							Timestamp: tradeMsg.Timestamp,
 							Hash:      "",
 						}
 						if err := handler(&syntheticBookMsg); err != nil {
-							c.logger.Error("error handling price_change converted to book message", "error", err)
+							c.logger.Error("error handling wrapped last_trade_price converted to book message", "error", err)
 						}
 						continue
 					}

@@ -123,9 +123,12 @@ func (s *MarketStreamService) RunStream() {
 	if s.gammaClient != nil {
 		s.logger.Info("fetching active markets from Gamma API to subscribe to WebSocket...")
 		
-		// Fetch active markets (limit to first 100 for initial implementation)
-		// You can increase this or use GetAllActiveMarkets() for all markets
-		markets, err := s.gammaClient.ListActiveMarkets(s.ctx, 100, 0)
+		// Fetch top active markets by volume (Gamma API already sorts by volumeNum desc)
+		// Get more markets and take the top 100 by volume for monitoring
+		markets, err := s.gammaClient.ListActiveMarkets(s.ctx, 500, 0) // Fetch more to ensure we get top volume markets
+		if err == nil && len(markets) > 100 {
+			markets = markets[:100] // Take only top 100 by volume
+		}
 		if err != nil {
 			s.logger.Error("failed to fetch markets from Gamma API", "error", err)
 			return // No fallback, as per user request
@@ -294,8 +297,10 @@ func (s *MarketStreamService) RunStream() {
 				"using_as_condition_id", conditionID)
 		}
 
-		// Extract mid-price and aggregate OHLCV using condition ID
+		// Extract mid-price and volume from order book
 		midPrice := ExtractMidPrice(bids, asks)
+		volume := ExtractVolume(bids, asks) // Extract volume from order book sizes
+
 		if midPrice > 0 {
 			// Parse timestamp (assuming it's in milliseconds)
 			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
@@ -344,7 +349,7 @@ func (s *MarketStreamService) RunStream() {
 				}
 				
 				// Use conditionID for OHLCV aggregation to ensure bars are stored under the correct market ID
-				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, timestamp); err != nil {
+				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
 					s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID)
 				}
 			} else {
@@ -454,13 +459,14 @@ func (s *MarketStreamService) RunMockStream() {
 			for _, market := range mockMarkets {
 				data := s.generateMockOrderBook(market.Market, market.AssetID)
 				
-				// Extract mid-price and aggregate OHLCV
+				// Extract mid-price and volume, then aggregate OHLCV
 				bids := data["bids"].([]interface{})
 				asks := data["asks"].([]interface{})
 				midPrice := ExtractMidPrice(bids, asks)
+				volume := ExtractVolume(bids, asks)
 				if midPrice > 0 {
 					timestamp := time.Now()
-					if err := s.ohlcvAggregator.UpdatePrice(market.Market, midPrice, timestamp); err != nil {
+					if err := s.ohlcvAggregator.UpdatePrice(market.Market, midPrice, volume, timestamp); err != nil {
 						s.logger.Error("failed to update OHLCV", "error", err, "market", market.Market)
 					}
 				}
