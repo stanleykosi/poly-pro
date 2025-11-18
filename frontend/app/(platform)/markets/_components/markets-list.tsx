@@ -137,12 +137,17 @@ export default function MarketsList() {
               {market.description}
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
+              {market.volume && (
+                <span className="px-2.5 py-1 bg-primary/10 text-primary border border-primary/20 rounded-md font-medium">
+                  📊 ${(parseFloat(market.volume) / 1000000).toFixed(1)}M vol
+                </span>
+              )}
               {market.liquidity && (
                 <span className="px-2.5 py-1 bg-muted rounded-md text-muted-foreground">
                   💰 ${parseFloat(market.liquidity).toLocaleString(undefined, {
                     minimumFractionDigits: 0,
                     maximumFractionDigits: 0,
-                  })}
+                  })} liq
                 </span>
               )}
               {market.end_date && (

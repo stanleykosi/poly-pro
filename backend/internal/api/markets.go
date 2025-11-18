@@ -135,8 +135,14 @@ func (server *Server) listMarkets(c *gin.Context) {
 
 	server.logger.Info("fetching active markets from Gamma API", "limit", limit, "offset", offset)
 
-	// Fetch markets from Gamma API
-	gammaMarkets, err := server.gammaClient.ListActiveMarkets(c.Request.Context(), limit, offset)
+	// Fetch more markets than requested to ensure we get top volume markets
+	// This matches the WebSocket service approach for consistency
+	fetchLimit := limit
+	if limit < 500 && offset == 0 {
+		// If requesting top markets (offset=0), fetch more to ensure proper volume sorting
+		fetchLimit = 500
+	}
+	gammaMarkets, err := server.gammaClient.ListActiveMarkets(c.Request.Context(), fetchLimit, offset)
 	if err != nil {
 		server.logger.Error("failed to fetch markets from Gamma API", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -187,9 +193,12 @@ func (server *Server) listMarkets(c *gin.Context) {
 		return marketsWithVolume[i].volumeNum > marketsWithVolume[j].volumeNum
 	})
 
-	// Extract MarketListItem from sorted slice
+	// Extract MarketListItem from sorted slice and limit to requested amount
 	markets := make([]MarketListItem, 0, len(marketsWithVolume))
-	for _, m := range marketsWithVolume {
+	for i, m := range marketsWithVolume {
+		if i >= limit {
+			break // Respect the original limit requested by frontend
+		}
 		markets = append(markets, m.MarketListItem)
 	}
 
