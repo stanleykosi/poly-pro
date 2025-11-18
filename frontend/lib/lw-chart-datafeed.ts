@@ -105,41 +105,52 @@ function initializeStoreSubscription() {
           return // Skip this iteration of forEach
         }
 
+        // Get the current time rounded down to the nearest 15-minute interval
+        const now = Math.floor(Date.now() / 1000)
+        const resolutionMinutes = 15 // 15-minute bars
+        const resolutionSeconds = resolutionMinutes * 60
+        const currentBarTime = Math.floor(now / resolutionSeconds) * resolutionSeconds as Time
+
         // Check if this is the first update (bar is empty/initialized with zeros)
         const isInitialBar = sub.lastBar.open === 0 && sub.lastBar.close === 0 && sub.lastBar.high === 0 && sub.lastBar.low === 0
 
         let updatedBar: BarData
 
         if (isInitialBar) {
-          // First real-time update - create a proper bar from the current price
-          const currentTime = Math.floor(Date.now() / 1000) as Time
+          // First real-time update - create the current incomplete bar
           updatedBar = {
-            time: currentTime,
-            open: newClose,
-            high: newClose,
-            low: newClose,
-            close: newClose,
+            time: currentBarTime,
+            open: newClose * 100, // Convert to percentage
+            high: newClose * 100, // Convert to percentage
+            low: newClose * 100,  // Convert to percentage
+            close: newClose * 100, // Convert to percentage
             volume: 0,
           }
-          console.log('[Chart Datafeed] Creating initial bar:', updatedBar)
-          // Add the bar to the series (first bar)
+          console.log('[Chart Datafeed] Creating current bar:', updatedBar)
+          // Add the bar to the series
           if ('setData' in sub.series) {
             sub.series.setData([updatedBar])
           }
-        } else {
-          // Update existing bar with new close price
+        } else if (sub.lastBar.time === currentBarTime) {
+          // Same time interval - update the existing bar
+          const percentagePrice = newClose * 100
           updatedBar = {
             ...sub.lastBar,
-            close: newClose,
+            close: percentagePrice,
             // Update high/low if the new price exceeds them
-            high: Math.max(sub.lastBar.high, newClose),
-            low: Math.min(sub.lastBar.low, newClose),
+            high: Math.max(sub.lastBar.high, percentagePrice),
+            low: Math.min(sub.lastBar.low, percentagePrice),
           }
-          console.log('[Chart Datafeed] Updating bar:', updatedBar)
+          console.log('[Chart Datafeed] Updating current bar:', updatedBar)
           // Update the chart series
           if ('update' in sub.series) {
             sub.series.update(updatedBar)
           }
+        } else {
+          // New time interval - this shouldn't happen in real-time updates
+          // The OHLCV aggregator should handle creating new bars when time intervals change
+          console.log('[Chart Datafeed] New time interval detected, price update ignored (waiting for historical data refresh)')
+          return
         }
 
         sub.lastBar = updatedBar
@@ -216,12 +227,13 @@ export async function fetchHistoricalData(
 
     // Convert backend format to Lightweight Charts format
     // Backend returns timestamps in seconds, Lightweight Charts Time type expects seconds for historical data
+    // Convert Polymarket prices (0-1) to percentages (0-100) for better chart display
     const bars: BarData[] = data.t.map((time: number, index: number) => ({
       time: time as Time, // Keep as seconds - Lightweight Charts expects Unix timestamp in seconds
-      open: data.o[index],
-      high: data.h[index],
-      low: data.l[index],
-      close: data.c[index],
+      open: data.o[index] * 100, // Convert to percentage
+      high: data.h[index] * 100, // Convert to percentage
+      low: data.l[index] * 100,  // Convert to percentage
+      close: data.c[index] * 100, // Convert to percentage
       volume: data.v[index],
     }))
 

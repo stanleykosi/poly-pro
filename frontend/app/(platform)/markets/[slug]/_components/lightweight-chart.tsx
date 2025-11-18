@@ -122,6 +122,16 @@ const LightweightChart: React.FC<LightweightChartProps> = ({
         },
         rightPriceScale: {
           borderColor: '#161B22',
+          scaleMargins: {
+            top: 0.1,
+            bottom: 0.1,
+          },
+        },
+        // Configure for Polymarket probability prices (0-1 range)
+        priceScale: {
+          autoScale: true,
+          mode: 0, // Normal mode
+          invertScale: false,
         },
       })
 

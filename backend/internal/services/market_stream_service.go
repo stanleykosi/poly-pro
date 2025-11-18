@@ -301,7 +301,9 @@ func (s *MarketStreamService) RunStream() {
 		midPrice := ExtractMidPrice(bids, asks)
 		volume := ExtractVolume(bids, asks) // Extract volume from order book sizes
 
-		if midPrice > 0 {
+		// Validate price: Polymarket prices should be between 0.001 and 0.999 (probabilities)
+		// Reject extreme prices that might be from incorrect token parsing
+		if midPrice > 0 && midPrice >= 0.001 && midPrice <= 0.999 {
 			// Parse timestamp (assuming it's in milliseconds)
 			timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 			if err == nil {
@@ -356,7 +358,7 @@ func (s *MarketStreamService) RunStream() {
 				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
 			}
 		} else {
-			s.logger.Debug("mid-price is 0, skipping OHLCV update", "condition_id", conditionID)
+			s.logger.Debug("mid-price out of valid range (%.6f), skipping OHLCV update", midPrice)
 		}
 
 		// Convert valid bids/asks to the format expected by frontend
