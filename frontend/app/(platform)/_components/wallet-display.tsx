@@ -71,7 +71,7 @@ export default function WalletDisplay() {
         // Fetch balance for the active wallet
         if (activeWallet) {
           console.log('[WalletDisplay] Found active wallet, fetching balance:', activeWallet.polymarket_funder_address)
-          fetchBalance()
+          fetchBalance(activeWallet) // Pass wallet directly to avoid race condition
         } else {
           console.log('[WalletDisplay] No active wallet found')
         }
@@ -118,13 +118,22 @@ export default function WalletDisplay() {
     }
   }, [fetchWallet]) // Only depends on fetchWallet, which is stable
 
-  const fetchBalance = async () => {
-    if (!wallet) {
+  // Auto-fetch balance when wallet is set but balance hasn't been loaded yet
+  useEffect(() => {
+    if (wallet && balance === null && !balanceLoading && !balanceError) {
+      console.log('[WalletDisplay] Auto-fetching balance for set wallet:', wallet.polymarket_funder_address)
+      fetchBalance()
+    }
+  }, [wallet, balance, balanceLoading, balanceError])
+
+  const fetchBalance = async (walletToUse?: Wallet) => {
+    const targetWallet = walletToUse || wallet
+    if (!targetWallet) {
       console.log('[WalletDisplay] No wallet available, skipping balance fetch')
       return
     }
 
-    console.log('[WalletDisplay] Fetching balance for wallet:', wallet.polymarket_funder_address)
+    console.log('[WalletDisplay] Fetching balance for wallet:', targetWallet.polymarket_funder_address)
 
     // Create a timeout to automatically fail after 15 seconds
     const timeoutId = setTimeout(() => {
@@ -259,7 +268,7 @@ export default function WalletDisplay() {
                 })} USDC
               </span>
               <button
-                onClick={fetchBalance}
+                onClick={() => fetchBalance()}
                 className="text-xs text-muted-foreground hover:text-foreground opacity-50 hover:opacity-100"
                 disabled={balanceLoading}
                 title="Refresh balance"
@@ -271,7 +280,7 @@ export default function WalletDisplay() {
             <div className="flex items-center space-x-1">
               <span className="text-xs text-red-600 dark:text-red-400">Failed to load</span>
               <button
-                onClick={fetchBalance}
+                onClick={() => fetchBalance()}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 disabled={balanceLoading}
               >
@@ -283,7 +292,7 @@ export default function WalletDisplay() {
               <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
               <span className="text-xs text-yellow-600 dark:text-yellow-400">Waiting...</span>
               <button
-                onClick={fetchBalance}
+                onClick={() => fetchBalance()}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline ml-1"
                 disabled={balanceLoading}
               >
