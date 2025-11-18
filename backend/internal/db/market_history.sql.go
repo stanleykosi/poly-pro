@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteOldMarketPriceHistory = `-- name: DeleteOldMarketPriceHistory :execrows
+DELETE FROM market_price_history
+WHERE time < $1
+`
+
+// @description Deletes OHLCV data older than the specified cutoff time to prevent database bloat.
+// This helps maintain database performance by removing old historical data.
+// @param cutoff_time The cutoff timestamp - data older than this will be deleted.
+func (q *Queries) DeleteOldMarketPriceHistory(ctx context.Context, time pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldMarketPriceHistory, time)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getMarketPriceHistory = `-- name: GetMarketPriceHistory :many
 /**
  * @description
@@ -106,7 +122,7 @@ type InsertMarketPriceHistoryParams struct {
 // @param low The lowest price in the period.
 // @param close The closing price.
 // @param volume The trading volume.
-// @param resolution The resolution/interval (e.g., '1', '5', '15', '60', 'D').
+// @param resolution The resolution/interval (e.g., '15', '60').
 func (q *Queries) InsertMarketPriceHistory(ctx context.Context, arg InsertMarketPriceHistoryParams) error {
 	_, err := q.db.Exec(ctx, insertMarketPriceHistory,
 		arg.PTime,

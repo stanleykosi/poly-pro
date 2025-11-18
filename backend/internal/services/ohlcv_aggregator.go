@@ -39,9 +39,10 @@ type OHLCVAggregator struct {
 	mu   sync.RWMutex
 	
 	// Track statistics
-	totalUpdates   int64
-	totalBarsSaved int64
-	lastStatusLog  time.Time
+	totalUpdates     int64
+	totalBarsSaved   int64
+	lastStatusLog    time.Time
+	lastCleanupTime  time.Time
 }
 
 // CurrentBar represents a bar that is currently being aggregated.
@@ -102,17 +103,24 @@ func NewOHLCVAggregator(ctx context.Context, logger *slog.Logger, store db.Queri
 // It extracts the mid-price from the order book (average of best bid and ask).
 func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, timestamp time.Time) error {
 	a.totalUpdates++
-	
+
 	// Log first few updates to confirm function is being called
 	if a.totalUpdates <= 3 {
-		a.logger.Info("OHLCV aggregator: processing price update", 
+		a.logger.Info("OHLCV aggregator: processing price update",
 			"update", a.totalUpdates,
 			"market_id", marketID,
 			"price", price)
 	}
-	
-	// Update all resolutions for this market
-	resolutions := []string{"1", "5", "15", "60", "D"}
+
+	// Periodic cleanup: run cleanup every 24 hours to prevent old data accumulation
+	if time.Since(a.lastCleanupTime) > 24*time.Hour {
+		if err := a.cleanupOldData(); err != nil {
+			a.logger.Error("failed to cleanup old data", "error", err)
+		}
+	}
+
+	// Update key resolutions for this market (15m and 1d for chart visualization)
+	resolutions := []string{"15", "D"}
 
 	for _, resolution := range resolutions {
 		if err := a.updateBarForResolution(marketID, resolution, price, timestamp); err != nil {
@@ -222,20 +230,15 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 // getBarStartTime calculates the start time of the bar for a given timestamp and resolution.
 func (a *OHLCVAggregator) getBarStartTime(timestamp time.Time, resolution string) time.Time {
 	switch resolution {
-	case "1": // 1 minute
-		return timestamp.Truncate(time.Minute)
-	case "5": // 5 minutes
-		return timestamp.Truncate(5 * time.Minute)
 	case "15": // 15 minutes
 		return timestamp.Truncate(15 * time.Minute)
-	case "60": // 1 hour
-		return timestamp.Truncate(time.Hour)
 	case "D": // 1 day
 		// Ensure we use UTC for daily bars to avoid timezone issues
 		utcTimestamp := timestamp.UTC()
 		return time.Date(utcTimestamp.Year(), utcTimestamp.Month(), utcTimestamp.Day(), 0, 0, 0, 0, time.UTC)
 	default:
-		return timestamp.Truncate(time.Hour)
+		// Default to 15 minutes for any unknown resolution
+		return timestamp.Truncate(15 * time.Minute)
 	}
 }
 
@@ -671,18 +674,58 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 // getBarEndTime calculates when a bar's time period ends based on its start time and resolution.
 func (a *OHLCVAggregator) getBarEndTime(startTime time.Time, resolution string) time.Time {
 	switch resolution {
-	case "1": // 1 minute
-		return startTime.Add(1 * time.Minute)
-	case "5": // 5 minutes
-		return startTime.Add(5 * time.Minute)
 	case "15": // 15 minutes
 		return startTime.Add(15 * time.Minute)
-	case "60": // 1 hour
-		return startTime.Add(1 * time.Hour)
 	case "D": // 1 day
 		return startTime.Add(24 * time.Hour)
 	default:
-		return startTime.Add(1 * time.Hour)
+		return startTime.Add(15 * time.Minute)
 	}
+}
+
+// cleanupOldData removes OHLCV data older than 90 days to prevent database bloat.
+// This prevents accumulation of test data and old historical data while keeping useful history.
+func (a *OHLCVAggregator) cleanupOldData() error {
+	// Calculate cutoff time: 90 days ago (keeps 3 months of historical data for charts)
+	cutoffTime := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	// Convert to pgtype.Timestamptz
+	var cutoff pgtype.Timestamptz
+	if err := cutoff.Scan(cutoffTime); err != nil {
+		return fmt.Errorf("failed to convert cutoff time: %w", err)
+	}
+
+	// Delete old data
+	result, err := a.store.DeleteOldMarketPriceHistory(a.ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("failed to delete old market price history: %w", err)
+	}
+
+	// Log the cleanup
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		a.logger.Info("🧹 cleaned up old OHLCV data",
+			"cutoff_date", cutoffTime.Format("2006-01-02"),
+			"error_getting_rows_affected", err)
+	} else if rowsAffected > 0 {
+		a.logger.Info("🧹 cleaned up old OHLCV data",
+			"cutoff_date", cutoffTime.Format("2006-01-02"),
+			"records_deleted", rowsAffected)
+	}
+
+	// Update last cleanup time
+	a.lastCleanupTime = time.Now()
+
+	return nil
+}
+
+// ManualCleanup allows manual triggering of old data cleanup.
+// This can be called via admin endpoints or maintenance scripts.
+func (a *OHLCVAggregator) ManualCleanup() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.logger.Info("🧹 manual cleanup triggered")
+	return a.cleanupOldData()
 }
 

@@ -19,6 +19,10 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// @description Associates a new Polymarket funder address with a user.
 	CreateWallet(ctx context.Context, arg CreateWalletParams) (Wallet, error)
+	// @description Deletes OHLCV data older than the specified cutoff time to prevent database bloat.
+	// This helps maintain database performance by removing old historical data.
+	// @param cutoff_time The cutoff timestamp - data older than this will be deleted.
+	DeleteOldMarketPriceHistory(ctx context.Context, time pgtype.Timestamptz) (int64, error)
 	// @description Retrieves the active wallet for a given user.
 	// This is used to fetch the signer_secret_ref needed for transaction signing.
 	GetActiveWalletByUserID(ctx context.Context, userID pgtype.UUID) (Wallet, error)
@@ -49,7 +53,7 @@ type Querier interface {
 	// @param low The lowest price in the period.
 	// @param close The closing price.
 	// @param volume The trading volume.
-	// @param resolution The resolution/interval (e.g., '1', '5', '15', '60', 'D').
+	// @param resolution The resolution/interval (e.g., '15', '60').
 	InsertMarketPriceHistory(ctx context.Context, arg InsertMarketPriceHistoryParams) error
 	// @description Updates the Polymarket order ID after the order is submitted to Polymarket.
 	UpdateOrderPolymarketID(ctx context.Context, arg UpdateOrderPolymarketIDParams) (Order, error)

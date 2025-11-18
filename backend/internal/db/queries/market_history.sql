@@ -37,6 +37,13 @@ ORDER BY time ASC;
 -- @param low The lowest price in the period.
 -- @param close The closing price.
 -- @param volume The trading volume.
--- @param resolution The resolution/interval (e.g., '1', '5', '15', '60', 'D').
+-- @param resolution The resolution/interval (e.g., '15', 'D').
 SELECT insert_market_price_history($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: DeleteOldMarketPriceHistory :execrows
+-- @description Deletes OHLCV data older than the specified cutoff time to prevent database bloat.
+-- This helps maintain database performance by removing old historical data.
+-- @param cutoff_time The cutoff timestamp - data older than this will be deleted.
+DELETE FROM market_price_history
+WHERE time < $1;
 
