@@ -97,15 +97,23 @@ class WalletService {
    * Get the USDC balance for the active wallet
    */
   async getWalletBalance(api: ApiClient): Promise<{ usdc_balance: string; wallet_address: string }> {
-    const response = await api.get<{
-      status: string;
-      data: { usdc_balance: string; wallet_address: string };
-      message?: string;
-    }>('/api/v1/wallets/balance')
-    if (response.data.status === 'success') {
-      return response.data.data
+    console.log('[WalletService] Fetching balance from /api/v1/wallets/balance')
+    try {
+      const response = await api.get<{
+        status: string;
+        data: { usdc_balance: string; wallet_address: string };
+        message?: string;
+      }>('/api/v1/wallets/balance')
+      console.log('[WalletService] Balance API response:', response)
+      if (response.data.status === 'success') {
+        console.log('[WalletService] Balance success:', response.data.data)
+        return response.data.data
+      }
+      throw new Error(response.data.message || 'Failed to retrieve wallet balance')
+    } catch (error) {
+      console.error('[WalletService] Balance API error:', error)
+      throw error
     }
-    throw new Error(response.data.message || 'Failed to retrieve wallet balance')
   }
 
   /**

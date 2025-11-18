@@ -32,6 +32,7 @@ export default function WalletDisplay() {
   const [copied, setCopied] = useState(false)
   const [balance, setBalance] = useState<string | null>(null)
   const [balanceLoading, setBalanceLoading] = useState(false)
+  const [balanceError, setBalanceError] = useState(false)
   const api = useApi()
   const fetchingRef = useRef(false)
   const mountedRef = useRef(true)
@@ -69,7 +70,10 @@ export default function WalletDisplay() {
 
         // Fetch balance for the active wallet
         if (activeWallet) {
+          console.log('[WalletDisplay] Found active wallet, fetching balance:', activeWallet.polymarket_funder_address)
           fetchBalance()
+        } else {
+          console.log('[WalletDisplay] No active wallet found')
         }
       }
     } catch (err: any) {
@@ -115,16 +119,29 @@ export default function WalletDisplay() {
   }, [fetchWallet]) // Only depends on fetchWallet, which is stable
 
   const fetchBalance = async () => {
-    if (!wallet) return
+    if (!wallet) {
+      console.log('[WalletDisplay] No wallet available, skipping balance fetch')
+      return
+    }
+
+    console.log('[WalletDisplay] Fetching balance for wallet:', wallet.polymarket_funder_address)
+
     try {
       setBalanceLoading(true)
+      setBalanceError(false) // Reset error state
       const balanceData = await walletService.getWalletBalance(apiRef.current)
+      console.log('[WalletDisplay] Balance data received:', balanceData)
+
       if (mountedRef.current) {
         setBalance(balanceData.usdc_balance)
+        console.log('[WalletDisplay] Balance set to:', balanceData.usdc_balance)
       }
     } catch (err: any) {
-      console.error('Failed to fetch balance:', err)
-      // Don't show error for balance failures, just leave it empty
+      console.error('[WalletDisplay] Failed to fetch balance:', err)
+      if (mountedRef.current) {
+        setBalanceError(true)
+        setBalance(null) // Keep as null to show error state
+      }
     } finally {
       if (mountedRef.current) {
         setBalanceLoading(false)
@@ -212,20 +229,38 @@ export default function WalletDisplay() {
       </TooltipProvider>
 
       {/* Balance Display */}
-      <div className="flex items-center space-x-2 mt-2 pt-2 border-t border-border">
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
         <span className="text-xs text-muted-foreground">Balance:</span>
-        {balanceLoading ? (
-          <div className="h-4 w-12 bg-muted animate-pulse rounded"></div>
-        ) : balance !== null ? (
-          <span className="text-xs font-mono font-semibold text-foreground">
-            ${parseFloat(balance).toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2
-            })} USDC
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">Unable to load</span>
-        )}
+        <div className="flex items-center space-x-2">
+          {balanceLoading ? (
+            <div className="h-4 w-12 bg-muted animate-pulse rounded"></div>
+          ) : balance !== null ? (
+            <span className="text-xs font-mono font-semibold text-foreground">
+              ${parseFloat(balance).toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+              })} USDC
+            </span>
+          ) : balanceError && wallet ? (
+            <div className="flex items-center space-x-1">
+              <span className="text-xs text-red-600 dark:text-red-400">Error</span>
+              <button
+                onClick={fetchBalance}
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                disabled={balanceLoading}
+              >
+                Retry
+              </button>
+            </div>
+          ) : wallet ? (
+            <div className="flex items-center space-x-1">
+              <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+              <span className="text-xs text-yellow-600 dark:text-yellow-400">Loading...</span>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">No wallet</span>
+          )}
+        </div>
       </div>
     </div>
   )
