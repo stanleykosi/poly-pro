@@ -273,8 +273,8 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 	convertToNumeric := func(val float64) (pgtype.Numeric, error) {
 		var num pgtype.Numeric
 		// Convert float64 to string with sufficient precision (10 decimal places)
-		// Use 'g' format to avoid trailing zeros and handle large/small numbers
-		valStr := strconv.FormatFloat(val, 'g', -1, 64)
+		// Use 'f' format to avoid scientific notation for large numbers, which pgtype.Numeric.Scan doesn't accept
+		valStr := strconv.FormatFloat(val, 'f', 10, 64)
 		if err := num.Scan(valStr); err != nil {
 			return num, fmt.Errorf("failed to scan %f as numeric: %w", val, err)
 		}
