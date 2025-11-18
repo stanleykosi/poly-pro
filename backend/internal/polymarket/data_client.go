@@ -39,6 +39,12 @@ type UserBalance struct {
 	USDC string `json:"usdc"` // USDC balance as string
 }
 
+// DataAPIValueResponse represents the actual response from the Data API
+type DataAPIValueResponse struct {
+	User  string  `json:"user"`
+	Value float64 `json:"value"`
+}
+
 // UserPositionsResponse represents the response from the positions endpoint
 type UserPositionsResponse struct {
 	Positions []UserPosition `json:"positions"`
@@ -106,9 +112,20 @@ func (c *DataAPIClient) GetUserBalance(ctx context.Context, walletAddress string
 		return nil, fmt.Errorf("Data API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var balance UserBalance
-	if err := json.Unmarshal(body, &balance); err != nil {
+	// The API returns an array of value objects
+	var valueResponses []DataAPIValueResponse
+	if err := json.Unmarshal(body, &valueResponses); err != nil {
 		return nil, fmt.Errorf("failed to parse balance response: %w", err)
+	}
+
+	if len(valueResponses) == 0 {
+		return nil, fmt.Errorf("no balance data returned for wallet: %s", walletAddress)
+	}
+
+	// Take the first (and should be only) value response
+	valueResp := valueResponses[0]
+	balance := UserBalance{
+		USDC: fmt.Sprintf("%.6f", valueResp.Value), // Format as string with 6 decimal places
 	}
 
 	c.logger.Info("successfully fetched user balance", "wallet_address", walletAddress, "usdc_balance", balance.USDC)
