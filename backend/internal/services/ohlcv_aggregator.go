@@ -489,7 +489,7 @@ func ExtractVolume(bids []interface{}, asks []interface{}) float64 {
 
 // ExtractVolumeWithLogging is a version of ExtractVolume with detailed logging for debugging
 // This should only be used temporarily to diagnose volume extraction issues
-func ExtractVolumeWithLogging(bids []interface{}, asks []interface{}, logger *slog.Logger, messageCount int64) float64 {
+func ExtractVolumeWithLogging(bids []interface{}, asks []interface{}, logger *slog.Logger, messageCount int) float64 {
 	volume := ExtractVolume(bids, asks)
 	
 	// Log detailed information for first few messages or when volume is detected
