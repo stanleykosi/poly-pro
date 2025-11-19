@@ -219,7 +219,7 @@ func (server *Server) listMarkets(c *gin.Context) {
 /**
  * @function getOfficialMarketPrices
  * @description A Gin handler that fetches official market prices directly from Polymarket's Gamma API.
- * Uses the Token.price field from the Gamma API which already contains Polymarket's official prices.
+ * Uses the Token.price field from the Gamma API which contains Polymarket's official average prices.
  * @param {gin.Context} c - The Gin context containing the request.
  */
 func (server *Server) getOfficialMarketPrices(c *gin.Context) {
@@ -233,7 +233,7 @@ func (server *Server) getOfficialMarketPrices(c *gin.Context) {
 		return
 	}
 
-	// Fetch market from Gamma API which includes the official prices
+	// Fetch market from Gamma API which includes the official prices in Token.Price field
 	gammaMarket, err := server.gammaClient.GetMarketByConditionID(c.Request.Context(), marketID)
 	if err != nil {
 		server.logger.Warn("failed to fetch market from Gamma API", "market_id", marketID, "error", err)
@@ -244,27 +244,42 @@ func (server *Server) getOfficialMarketPrices(c *gin.Context) {
 		return
 	}
 
-	// Extract prices from the tokens array
+	// Extract prices directly from the tokens array - Gamma API provides official average prices
 	prices := make([]polymarket.MarketPrice, 0, len(gammaMarket.Tokens))
 
 	for _, token := range gammaMarket.Tokens {
-		if token.TokenID == "" || token.Price == "" {
+		// Skip tokens without token ID
+		if token.TokenID == "" {
+			server.logger.Debug("skipping token without token ID", "outcome", token.Outcome)
+			continue
+		}
+
+		// Parse the official price from Gamma API
+		// If price is empty, skip this token (some tokens might not have prices yet)
+		if token.Price == "" {
+			server.logger.Debug("token has no price in Gamma API response", "token_id", token.TokenID, "outcome", token.Outcome)
 			continue
 		}
 
 		price, err := parseFloat(token.Price)
 		if err != nil {
-			server.logger.Warn("failed to parse token price", "token_id", token.TokenID, "price", token.Price, "error", err)
+			server.logger.Warn("failed to parse token price from Gamma API", "token_id", token.TokenID, "price", token.Price, "error", err)
 			continue
 		}
 
-		// Create market price using direct Gamma API data
+		// Validate price is in valid range (0-1 for probability markets)
+		if price < 0 || price > 1 {
+			server.logger.Warn("token price out of valid range", "token_id", token.TokenID, "price", price)
+			continue
+		}
+
+		// Create market price using Gamma API's official average price
 		marketPrice := polymarket.MarketPrice{
 			TokenID:     token.TokenID,
-			BestBid:     price, // Gamma API gives us the market price directly
-			BestAsk:     price, // Gamma API gives us the market price directly
+			BestBid:     price, // Gamma API gives us the official average price directly
+			BestAsk:     price, // Gamma API gives us the official average price directly
 			Spread:      0,     // Not available from Gamma API
-			MarketPrice: price, // This is the official Polymarket price
+			MarketPrice: price, // This is Polymarket's official average price
 			PriceSource: "gamma_api", // Direct from Polymarket's Gamma API
 			LastUpdated: gammaMarket.UpdatedAt,
 		}
@@ -272,6 +287,7 @@ func (server *Server) getOfficialMarketPrices(c *gin.Context) {
 	}
 
 	if len(prices) == 0 {
+		server.logger.Warn("no valid prices found for market", "market_id", marketID, "tokens_count", len(gammaMarket.Tokens))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"status": "error",
 			"message": "No valid prices found for market",
