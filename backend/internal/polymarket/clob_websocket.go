@@ -280,9 +280,12 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 			var tradeMsg LastTradePriceMessage
 			if err := json.Unmarshal(message, &tradeMsg); err == nil && tradeMsg.EventType == "last_trade_price" {
 				// Successfully parsed as trade event
-				if messageCount == 1 {
-					c.logger.Info("WebSocket: parsed last_trade_price event", "market", tradeMsg.Market)
-				}
+				c.logger.Info("✅ WebSocket: parsed last_trade_price event", 
+					"market", tradeMsg.Market,
+					"asset_id", tradeMsg.AssetID,
+					"price", tradeMsg.Price,
+					"size", tradeMsg.Size,
+					"message_count", messageCount)
 				// Convert trade to a book message for OHLCV aggregation with volume
 				// Use the trade price as both bid and ask, and trade size as volume
 				price := tradeMsg.Price
@@ -367,9 +370,12 @@ func (c *CLOBWebSocketClient) Listen(handler MessageHandler) error {
 				if wsMsg.EventType == "last_trade_price" {
 					var tradeMsg LastTradePriceMessage
 					if err := json.Unmarshal(wsMsg.Data, &tradeMsg); err == nil {
-						if messageCount == 1 {
-							c.logger.Info("WebSocket: parsed wrapped last_trade_price", "market", tradeMsg.Market)
-						}
+						c.logger.Info("✅ WebSocket: parsed wrapped last_trade_price", 
+							"market", tradeMsg.Market,
+							"asset_id", tradeMsg.AssetID,
+							"price", tradeMsg.Price,
+							"size", tradeMsg.Size,
+							"message_count", messageCount)
 						// Convert trade to a book message for OHLCV aggregation with volume
 						price := tradeMsg.Price
 						size := tradeMsg.Size

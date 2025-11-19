@@ -229,10 +229,21 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	if price < bar.Low {
 		bar.Low = price
 	}
+	oldVolume := bar.Volume
 	bar.Volume += volume // Accumulate volume
 	bar.Count++
-
-	// No need to log every update - too verbose
+	
+	// Log volume accumulation for debugging (first few updates or when volume changes)
+	if a.totalUpdates <= 20 || volume > 0 || (a.totalUpdates%100 == 0 && bar.Volume > 0) {
+		a.logger.Info("💰 volume accumulation",
+			"market_id", marketID,
+			"resolution", resolution,
+			"incoming_volume", volume,
+			"previous_total_volume", oldVolume,
+			"new_total_volume", bar.Volume,
+			"update_count", a.totalUpdates,
+			"bar_count", bar.Count)
+	}
 
 	return nil
 }
@@ -312,7 +323,18 @@ func (a *OHLCVAggregator) saveBar(bar *CurrentBar) error {
 		PResolution: bar.Resolution,
 	}
 
-	// Removed verbose insert attempt logging
+	// Log bar being saved with volume information
+	a.logger.Info("💾 saving OHLCV bar to database",
+		"market_id", bar.MarketID,
+		"resolution", bar.Resolution,
+		"time", timeVal.Time.Format("2006-01-02 15:04:05"),
+		"open", bar.Open,
+		"high", bar.High,
+		"low", bar.Low,
+		"close", bar.Close,
+		"volume", bar.Volume,
+		"update_count", bar.Count,
+		"total_bars_saved", a.totalBarsSaved+1)
 
 	if err := a.store.InsertMarketPriceHistory(a.ctx, arg); err != nil {
 		// Log detailed error information
@@ -463,6 +485,44 @@ func ExtractVolume(bids []interface{}, asks []interface{}) float64 {
 	// We only track price changes, not order book depth as volume
 	// Actual volume should come from trade events
 	return 0
+}
+
+// ExtractVolumeWithLogging is a version of ExtractVolume with detailed logging for debugging
+// This should only be used temporarily to diagnose volume extraction issues
+func ExtractVolumeWithLogging(bids []interface{}, asks []interface{}, logger *slog.Logger, messageCount int64) float64 {
+	volume := ExtractVolume(bids, asks)
+	
+	// Log detailed information for first few messages or when volume is detected
+	if messageCount <= 10 || volume > 0 {
+		logger.Info("🔍 ExtractVolume debugging",
+			"bids_count", len(bids),
+			"asks_count", len(asks),
+			"extracted_volume", volume,
+			"message_count", messageCount)
+		
+		if len(bids) == 1 && len(asks) == 1 {
+			bidMap, bidOk := bids[0].(map[string]interface{})
+			askMap, askOk := asks[0].(map[string]interface{})
+			
+			if bidOk && askOk {
+				bidPrice := bidMap["price"]
+				bidSize := bidMap["size"]
+				askPrice := askMap["price"]
+				askSize := askMap["size"]
+				
+				logger.Info("🔍 ExtractVolume: single bid/ask details",
+					"bid_price", bidPrice,
+					"bid_size", bidSize,
+					"ask_price", askPrice,
+					"ask_size", askSize,
+					"prices_match", bidPrice == askPrice,
+					"sizes_match", bidSize == askSize,
+					"message_count", messageCount)
+			}
+		}
+	}
+	
+	return volume
 }
 
 // parseFloat is a helper to parse string to float64.

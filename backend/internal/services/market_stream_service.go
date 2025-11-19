@@ -439,7 +439,7 @@ func (s *MarketStreamService) RunStream() {
 		// Extract mid-price, spread, and volume from order book
 		// According to Polymarket: use mid-price unless spread > $0.10, then use last traded price
 		midPrice, spread := ExtractMidPrice(bids, asks)
-		volume := ExtractVolume(bids, asks) // Extract volume (0 for order book updates, actual size for trades)
+		volume := ExtractVolumeWithLogging(bids, asks, s.logger, messageCount) // Extract volume (0 for order book updates, actual size for trades)
 
 		// Validate price: Polymarket prices should be between 0.001 and 0.999 (probabilities)
 		// Reject extreme prices that might be from incorrect token parsing
