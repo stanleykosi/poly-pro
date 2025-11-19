@@ -441,11 +441,55 @@ func (s *MarketStreamService) RunStream() {
 		midPrice, spread := ExtractMidPrice(bids, asks)
 		volume := ExtractVolumeWithLogging(bids, asks, s.logger, messageCount) // Extract volume (0 for order book updates, actual size for trades)
 
+		// CRITICAL: For YES tokens in active markets, we MUST have both bid and ask to calculate valid mid-price
+		// Single-sided order books are unreliable and shouldn't be used for OHLCV aggregation
+		hasBothSides := len(validBids) > 0 && len(validAsks) > 0
+		
+		// CRITICAL DEBUGGING: Log raw prices for YES tokens, especially when price is suspicious (0.5 or near 0.5)
+		// This helps identify if we're processing wrong tokens or getting invalid prices
+		if shouldAggregateOHLCV && (messageCount <= 20 || (midPrice >= 0.49 && midPrice <= 0.51) || !hasBothSides) {
+			var bestBidStr, bestAskStr string
+			if len(validBids) > 0 {
+				bestBidStr = validBids[0].Price
+			}
+			if len(validAsks) > 0 {
+				bestAskStr = validAsks[0].Price
+			}
+			s.logger.Warn("🔍 DEBUG: YES token price extraction",
+				"condition_id", conditionID,
+				"asset_id", bookMsg.AssetID,
+				"token_type", tokenType,
+				"best_bid", bestBidStr,
+				"best_ask", bestAskStr,
+				"bids_count", len(validBids),
+				"asks_count", len(validAsks),
+				"has_both_sides", hasBothSides,
+				"calculated_mid_price", midPrice,
+				"spread", spread,
+				"message_count", messageCount,
+				"is_suspicious_0_5", midPrice >= 0.49 && midPrice <= 0.51)
+		}
+
 		// Validate price: Polymarket prices should be between 0.001 and 0.999 (probabilities)
 		// Reject extreme prices that might be from incorrect token parsing
+		// CRITICAL: For YES tokens, require both bid and ask for valid price calculation
 		// Note: If spread > 0.10, we should ideally use last traded price, but for now we'll use mid-price
 		// as we're tracking order book updates. Last traded price would come from trade events.
 		if midPrice > 0 && midPrice >= 0.001 && midPrice <= 0.999 {
+			// For YES tokens, reject prices calculated from single-sided order books
+			if shouldAggregateOHLCV && !hasBothSides {
+				if messageCount <= 20 || messageCount%1000 == 0 {
+					s.logger.Warn("⚠️  REJECTED: YES token price from single-sided order book (missing bid or ask)",
+						"condition_id", conditionID,
+						"asset_id", bookMsg.AssetID,
+						"bids_count", len(validBids),
+						"asks_count", len(validAsks),
+						"calculated_price", midPrice,
+						"message_count", messageCount)
+				}
+				// Skip this update - don't aggregate OHLCV for single-sided prices
+				return nil
+			}
 				// Parse timestamp (Polymarket CLOB WebSocket sends timestamps in MILLISECONDS since epoch)
 				timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 				if err == nil {
@@ -484,6 +528,35 @@ func (s *MarketStreamService) RunStream() {
 				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
 				// YES token represents the market's implied probability
 				if shouldAggregateOHLCV {
+					// CRITICAL VALIDATION: Reject prices exactly at 0.5 for YES tokens in active markets
+					// Top 100 markets by volume should NOT have YES prices at exactly 0.5 (perfectly balanced)
+					// This is a strong indicator of incorrect token identification or invalid price data
+					if midPrice >= 0.499 && midPrice <= 0.501 {
+						var bestBidStr, bestAskStr string
+						if len(validBids) > 0 {
+							bestBidStr = validBids[0].Price
+						} else {
+							bestBidStr = "none"
+						}
+						if len(validAsks) > 0 {
+							bestAskStr = validAsks[0].Price
+						} else {
+							bestAskStr = "none"
+						}
+						s.logger.Error("❌ REJECTED: YES token price is exactly 0.5 - likely invalid data or wrong token",
+							"condition_id", conditionID,
+							"asset_id", bookMsg.AssetID,
+							"token_type", tokenType,
+							"mid_price", midPrice,
+							"best_bid", bestBidStr,
+							"best_ask", bestAskStr,
+							"bids_count", len(validBids),
+							"asks_count", len(validAsks),
+							"message_count", messageCount)
+						// Skip this update - don't aggregate OHLCV for suspicious 0.5 prices
+						return nil
+					}
+					
 					// Log wide spreads (Polymarket uses last traded price when spread > 0.10)
 					if spread > 0.10 && (messageCount <= 10 || messageCount%1000 == 0) {
 						s.logger.Warn("⚠️  wide spread detected, consider using last traded price",

@@ -230,15 +230,36 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 			Count:      0,
 		}
 		// Ensure High and Low are set correctly based on Open and current price
+		// High should be the maximum of Open and current price
+		// Low should be the minimum of Open and current price
 		if price > previousClosePrice {
 			bar.High = price
-			bar.Low = previousClosePrice
+			bar.Low = previousClosePrice // Low is the minimum of Open (previousClosePrice) and price
 		} else if price < previousClosePrice {
 			bar.High = previousClosePrice
-			bar.Low = price
+			bar.Low = price // Low is the minimum of Open (previousClosePrice) and price
 		} else {
 			bar.High = previousClosePrice
 			bar.Low = previousClosePrice
+		}
+		
+		// CRITICAL FIX: If previousClosePrice is 0.5 (likely a default/stale value from first bar)
+		// but current price is much higher, we should use the current price as the Low instead of 0.5.
+		// This is because 0.5 is likely a default initialization value, not a real traded price.
+		// Only apply this fix if previousClosePrice is exactly 0.5 and price is significantly higher (> 0.6).
+		// This prevents Low from being stuck at 0.5 when the actual minimum price in the bar is much higher.
+		if previousClosePrice == 0.5 && price > 0.6 {
+			// Use the current price as Low instead of 0.5, since 0.5 is likely a default value
+			// The actual Low will be updated by the normal update logic if lower prices come in
+			bar.Low = price
+			if a.totalUpdates <= 20 {
+				a.logger.Info("🔧 fixing Low value: previousClosePrice was 0.5 (default), using current price as Low",
+					"market_id", marketID,
+					"resolution", resolution,
+					"previous_close_price", previousClosePrice,
+					"current_price", price,
+					"new_low", bar.Low)
+			}
 		}
 		a.bars[marketID][resolution] = bar
 
