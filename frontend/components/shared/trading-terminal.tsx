@@ -120,6 +120,14 @@ export default function TradingTerminal({
       />
       <div className="flex h-full flex-col gap-6">
       <header className="space-y-2">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => window.history.back()}
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            ← Back to Markets
+          </button>
+        </div>
         <h1 className="text-3xl font-bold tracking-tight text-foreground">
           {initialMarketData.title}
         </h1>
@@ -144,9 +152,9 @@ export default function TradingTerminal({
       </header>
       <div className="flex flex-col gap-6 flex-1 min-h-0">
         {/* Top row: Chart and Order Book side by side */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Chart takes 2/3 of the width */}
-          <div className="lg:col-span-2 min-h-[500px]">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+          {/* Chart takes 3/5 of the width */}
+          <div className="xl:col-span-3 min-h-[500px]">
             <Card className="h-full flex flex-col">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg">Price Chart</CardTitle>
@@ -158,12 +166,12 @@ export default function TradingTerminal({
             </Card>
           </div>
 
-          {/* Order Book takes 1/3 of the width */}
-          <div className="min-h-[500px]">
+          {/* Order Book takes 2/5 of the width */}
+          <div className="xl:col-span-2 min-h-[600px]">
             <Card className="h-full flex flex-col">
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Order Book</CardTitle>
-                <CardDescription className="text-xs">Live bids and asks</CardDescription>
+                <CardTitle className="text-lg">Prediction Market</CardTitle>
+                <CardDescription className="text-xs">YES vs NO positions</CardDescription>
               </CardHeader>
               <CardContent className="flex-1 min-h-0 p-0">
                 <OrderBook

@@ -61,7 +61,7 @@ export default function PlaceOrderForm({
   const [success, setSuccess] = useState<string | null>(null)
 
   const api = useApi()
-  const orderBook = useMarketStore((s) => s.markets[marketId]?.orderBook)
+  const polymarketOrderBook = useMarketStore((s) => s.getPolymarketOrderBook(marketId))
   const [userPositions, setUserPositions] = useState<any[]>([])
   const [positionsLoading, setPositionsLoading] = useState(false)
 
@@ -97,43 +97,76 @@ export default function PlaceOrderForm({
     }
   }, [side, marketId])
 
-  // Get best available prices from order book for market orders
+  // Get best available prices from token-specific order books for market orders
   const bestBid = useMemo(() => {
-    if (!orderBook?.bids || orderBook.bids.length === 0) return null
-    const validBids = orderBook.bids.filter((bid) => {
+    if (!polymarketOrderBook) return null
+
+    // For BUY_YES or BUY_NO, we want the best bid from the respective token
+    // For SELL, we want the best bid from whichever token the user owns
+    let targetToken = null
+    if (side === 'BUY_YES' && polymarketOrderBook.yesToken) {
+      targetToken = polymarketOrderBook.yesToken
+    } else if (side === 'BUY_NO' && polymarketOrderBook.noToken) {
+      targetToken = polymarketOrderBook.noToken
+    } else if (side === 'SELL') {
+      // For sell orders, use YES token as default (can be changed based on user positions)
+      targetToken = polymarketOrderBook.yesToken
+    }
+
+    if (!targetToken?.orderBook.bids || targetToken.orderBook.bids.length === 0) return null
+
+    const validBids = targetToken.orderBook.bids.filter((bid) => {
       const p = parseFloat(bid.price)
       return !isNaN(p) && p > 0 && p < 1 && bid.price !== '' && bid.size !== ''
     })
     if (validBids.length === 0) return null
     return parseFloat(validBids[0].price)
-  }, [orderBook?.bids])
+  }, [polymarketOrderBook, side])
 
   const bestAsk = useMemo(() => {
-    if (!orderBook?.asks || orderBook.asks.length === 0) return null
-    const validAsks = orderBook.asks.filter((ask) => {
+    if (!polymarketOrderBook) return null
+
+    // For BUY_YES or BUY_NO, we want the best ask from the respective token
+    // For SELL, we want the best ask from whichever token the user owns
+    let targetToken = null
+    if (side === 'BUY_YES' && polymarketOrderBook.yesToken) {
+      targetToken = polymarketOrderBook.yesToken
+    } else if (side === 'BUY_NO' && polymarketOrderBook.noToken) {
+      targetToken = polymarketOrderBook.noToken
+    } else if (side === 'SELL') {
+      // For sell orders, use YES token as default (can be changed based on user positions)
+      targetToken = polymarketOrderBook.yesToken
+    }
+
+    if (!targetToken?.orderBook.asks || targetToken.orderBook.asks.length === 0) return null
+
+    const validAsks = targetToken.orderBook.asks.filter((ask) => {
       const p = parseFloat(ask.price)
       return !isNaN(p) && p > 0 && p < 1 && ask.price !== '' && ask.size !== ''
     })
     if (validAsks.length === 0) return null
     return parseFloat(validAsks[0].price)
-  }, [orderBook?.asks])
+  }, [polymarketOrderBook, side])
 
   // Debug logging for order book data
   useEffect(() => {
-    if (orderBook) {
-      console.log('[PlaceOrderForm] Order book data:', {
+    if (polymarketOrderBook) {
+      console.log('[PlaceOrderForm] Polymarket order book data:', {
         marketId,
-        hasBids: orderBook.bids?.length > 0,
-        hasAsks: orderBook.asks?.length > 0,
-        bidsCount: orderBook.bids?.length || 0,
-        asksCount: orderBook.asks?.length || 0,
+        hasYesToken: !!polymarketOrderBook.yesToken,
+        hasNoToken: !!polymarketOrderBook.noToken,
+        yesBids: polymarketOrderBook.yesToken?.orderBook.bids?.length || 0,
+        yesAsks: polymarketOrderBook.yesToken?.orderBook.asks?.length || 0,
+        noBids: polymarketOrderBook.noToken?.orderBook.bids?.length || 0,
+        noAsks: polymarketOrderBook.noToken?.orderBook.asks?.length || 0,
         bestBid: bestBid,
         bestAsk: bestAsk,
+        overallSentiment: polymarketOrderBook.overallSentiment,
       })
     } else {
-      console.log('[PlaceOrderForm] No order book data for market:', marketId)
+      console.log('[PlaceOrderForm] No polymarket order book data for market:', marketId)
     }
-  }, [orderBook, marketId, bestBid, bestAsk])
+  }, [polymarketOrderBook, marketId, bestBid, bestAsk])
 
   // Update price field when a price is selected from the order book (only for limit orders)
   useEffect(() => {

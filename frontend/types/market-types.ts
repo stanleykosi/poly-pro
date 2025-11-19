@@ -77,6 +77,40 @@ export interface ProcessedOrderBook {
 }
 
 /**
+ * @interface TokenOrderBook
+ * @description Order book data for a specific token (YES or NO).
+ * @property {string} tokenId - The token ID.
+ * @property {'yes' | 'no'} tokenType - Whether this is YES or NO token.
+ * @property {ProcessedOrderBook} orderBook - The processed order book for this token.
+ */
+export interface TokenOrderBook {
+  tokenId: string
+  tokenType: 'yes' | 'no'
+  orderBook: ProcessedOrderBook
+}
+
+/**
+ * @interface PolymarketOrderBook
+ * @description Complete order book data for a Polymarket with separate YES/NO token order books.
+ * @property {string} marketId - The market/condition ID.
+ * @property {TokenOrderBook | null} yesToken - Order book for YES token.
+ * @property {TokenOrderBook | null} noToken - Order book for NO token.
+ * @property {number} marketSpread - Spread between YES and NO token prices.
+ * @property {'bullish' | 'bearish' | 'neutral'} overallSentiment - Overall market sentiment.
+ * @property {boolean} isLoading - Whether any order book is loading.
+ * @property {string} lastUpdate - Last update timestamp.
+ */
+export interface PolymarketOrderBook {
+  marketId: string
+  yesToken: TokenOrderBook | null
+  noToken: TokenOrderBook | null
+  marketSpread: number
+  overallSentiment: 'bullish' | 'bearish' | 'neutral'
+  isLoading: boolean
+  lastUpdate: string
+}
+
+/**
  * @interface MarketData
  * @description The structure used to store all real-time data for a single market within the Zustand store.
  * @property {string} marketId - The unique identifier for the market (Condition ID).
@@ -117,6 +151,7 @@ export interface Market {
 export interface WebSocketBookMessage {
   event_type: 'book'
   asset_id: string
+  token_type: 'yes' | 'no' | 'unknown' // Identifies if this is YES or NO token order book
   market: string // This is the marketId (Condition ID)
   bids: OrderBookLevel[]
   asks: OrderBookLevel[]

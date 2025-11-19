@@ -44,6 +44,7 @@ type MarketStreamService struct {
 	config          config.Config
 	ohlcvAggregator *OHLCVAggregator
 	gammaClient     *polymarket.GammaAPIClient
+	tokenMap        map[string]map[string]string // condition_id -> token_id -> token_type ("yes" or "no")
 }
 
 // OrderBookLevel represents a single price level in the order book.
@@ -83,7 +84,52 @@ func NewMarketStreamService(ctx context.Context, logger *slog.Logger, redisClien
 		config:          cfg,
 		ohlcvAggregator: ohlcvAggregator,
 		gammaClient:     gammaClient,
+		tokenMap:        make(map[string]map[string]string),
 	}
+}
+
+// identifyTokenType determines if a token is YES or NO based on market data
+func (s *MarketStreamService) identifyTokenType(conditionID, tokenID string) string {
+	// Check if we already have this mapping cached
+	if tokenTypes, exists := s.tokenMap[conditionID]; exists {
+		if tokenType, found := tokenTypes[tokenID]; found {
+			return tokenType
+		}
+	}
+
+	// Fetch market data to identify token types
+	market, err := s.gammaClient.GetMarket(conditionID)
+	if err != nil {
+		s.logger.Warn("failed to fetch market data for token identification", "condition_id", conditionID, "error", err)
+		return "unknown"
+	}
+
+	// Parse clobTokenIds - format is ["NO_TOKEN_ID", "YES_TOKEN_ID"]
+	if market.ClobTokenIds != nil {
+		var tokenIds []string
+		if err := json.Unmarshal([]byte(*market.ClobTokenIds), &tokenIds); err == nil && len(tokenIds) >= 2 {
+			noTokenID := tokenIds[0]
+			yesTokenID := tokenIds[1]
+
+			// Initialize token map for this condition
+			if s.tokenMap[conditionID] == nil {
+				s.tokenMap[conditionID] = make(map[string]string)
+			}
+
+			// Store mappings
+			s.tokenMap[conditionID][noTokenID] = "no"
+			s.tokenMap[conditionID][yesTokenID] = "yes"
+
+			// Return the type for the requested token
+			if tokenID == noTokenID {
+				return "no"
+			} else if tokenID == yesTokenID {
+				return "yes"
+			}
+		}
+	}
+
+	return "unknown"
 }
 
 /**
@@ -377,10 +423,14 @@ func (s *MarketStreamService) RunStream() {
 			}
 		}
 
-		// Convert to our format (using filtered bids/asks)
+		// Identify token type (YES or NO)
+		tokenType := s.identifyTokenType(conditionID, bookMsg.AssetID)
+
+		// Convert to our format with token separation
 		data := map[string]interface{}{
 			"event_type": bookMsg.EventType,
 			"asset_id":   bookMsg.AssetID,
+			"token_type": tokenType, // "yes", "no", or "unknown"
 			"market":     conditionID, // Use condition ID for the market field
 			"bids":       frontendBids,
 			"asks":       frontendAsks,

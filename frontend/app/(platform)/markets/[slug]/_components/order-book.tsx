@@ -1,23 +1,21 @@
 /**
  * @description
- * Professional, state-of-the-art order book component designed for modern trading terminals.
- * Features real-time updates, depth visualization, market sentiment indicators, and smooth animations.
+ * Polymarket-native order book component displaying YES and NO token positions separately.
+ * Shows probability-based pricing and market sentiment analysis.
  *
  * Key features:
+ * - Token Separation: Separate YES/NO order books instead of bids/asks
+ * - Probability Display: Prices shown as percentages (65% vs 0.65)
+ * - Market Sentiment: Analysis based on YES/NO volume ratios
  * - Loading States: Skeleton loaders during data fetch
- * - Real-time Updates: Seamless updates without clearing data
- * - Depth Visualization: Color-coded bars showing order depth
- * - Market Sentiment: Visual indicators for bullish/bearish sentiment
- * - Spread Display: Prominent spread information
- * - Smooth Animations: Animated price changes and new orders
- * - Professional Styling: Bloomberg-like terminal appearance
- * - Order Flow: Visual indicators for market direction
+ * - Real-time Updates: Seamless updates for each token
+ * - Depth Visualization: Color-coded bars for order depth
  *
  * @dependencies
  * - react: For component logic and animations
- * - @/lib/stores/market-store: Enhanced Zustand store with processed order book data
+ * - @/lib/stores/market-store: Enhanced Zustand store with token-separated data
  * - @/lib/utils: Utility functions for conditional classes
- * - @/types: Enhanced type definitions for order book data
+ * - @/types: Token-separated type definitions
  */
 'use client'
 
@@ -210,7 +208,7 @@ const OrderBookRow = ({
 }
 
 export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
-  const processedOrderBook = useMarketStore((state) => state.getProcessedOrderBook(marketId))
+  const polymarketOrderBook = useMarketStore((state) => state.getPolymarketOrderBook(marketId))
   const generateMockOrderBook = useMarketStore((state) => state.generateMockOrderBook)
   const animationRef = useRef<NodeJS.Timeout>()
   const fallbackTimeoutRef = useRef<NodeJS.Timeout>()
@@ -220,7 +218,7 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
 
   // Fallback mechanism: if no order book data after 10 seconds, generate mock data
   useEffect(() => {
-    if (!processedOrderBook) {
+    if (!polymarketOrderBook || polymarketOrderBook.isLoading) {
       fallbackTimeoutRef.current = setTimeout(() => {
         console.log('[OrderBook] No real-time data received, generating mock order book for:', marketId)
         generateMockOrderBook(marketId, 0.5) // Default 50% probability
@@ -234,26 +232,14 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
         clearTimeout(fallbackTimeoutRef.current)
       }
     }
-  }, [processedOrderBook, marketId, generateMockOrderBook])
+  }, [polymarketOrderBook, marketId, generateMockOrderBook])
 
   // Clear animation flags after animation completes
   useEffect(() => {
-    if (processedOrderBook) {
+    if (polymarketOrderBook && !polymarketOrderBook.isLoading) {
       animationRef.current = setTimeout(() => {
-        // Clear animation flags by updating the processed data
-        const updatedBids = processedOrderBook.bids.map(bid => ({
-          ...bid,
-          isNew: false,
-          isChanged: false,
-        }))
-        const updatedAsks = processedOrderBook.asks.map(ask => ({
-          ...ask,
-          isNew: false,
-          isChanged: false,
-        }))
-
-        // This would trigger a re-render to clear animation states
-        // In a real implementation, you'd update the store
+        // Animation clearing logic would go here if needed
+        // For now, we'll keep it simple
       }, 1000)
     }
 
@@ -262,10 +248,10 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
         clearTimeout(animationRef.current)
       }
     }
-  }, [processedOrderBook])
+  }, [polymarketOrderBook])
 
-  // Show loading skeleton if no data or loading, or if data is empty
-  if (!processedOrderBook || processedOrderBook.isLoading || (processedOrderBook.bids.length === 0 && processedOrderBook.asks.length === 0)) {
+  // Show loading skeleton if no data or loading
+  if (!polymarketOrderBook || polymarketOrderBook.isLoading) {
     return (
       <div className="flex h-[600px] flex-col border border-border rounded-lg bg-card shadow-sm">
         <OrderBookSkeleton />
@@ -279,16 +265,18 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
     )
   }
 
-  const { bids, asks, spread, spreadPercentage, maxDepth, marketSentiment } = processedOrderBook
+  const { yesToken, noToken, marketSpread, overallSentiment, lastUpdate } = polymarketOrderBook
 
   // Debug logging
-  console.log('[OrderBook] Rendering with data:', {
-    bidsCount: bids.length,
-    asksCount: asks.length,
-    firstBid: bids[0]?.price,
-    firstAsk: asks[0]?.price,
-    spread,
-    marketSentiment
+  console.log('[OrderBook] Rendering polymarket order book:', {
+    hasYesToken: !!yesToken,
+    hasNoToken: !!noToken,
+    yesBids: yesToken?.orderBook.bids.length || 0,
+    yesAsks: yesToken?.orderBook.asks.length || 0,
+    noBids: noToken?.orderBook.bids.length || 0,
+    noAsks: noToken?.orderBook.asks.length || 0,
+    marketSpread,
+    overallSentiment
   })
 
   return (
@@ -296,19 +284,19 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-muted/50 px-4 py-3">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-foreground">Order Book</h3>
+          <h3 className="text-sm font-semibold text-foreground">Prediction Market</h3>
           <div className={cn(
             "px-2 py-1 rounded-full text-xs font-medium",
-            marketSentiment === 'bullish' && "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-            marketSentiment === 'bearish' && "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-            marketSentiment === 'neutral' && "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
+            overallSentiment === 'bullish' && "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+            overallSentiment === 'bearish' && "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+            overallSentiment === 'neutral' && "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
           )}>
-            {marketSentiment === 'bullish' ? '📈 Bullish' :
-             marketSentiment === 'bearish' ? '📉 Bearish' : '⚖️ Neutral'}
+            {overallSentiment === 'bullish' ? '🟢 Bullish' :
+             overallSentiment === 'bearish' ? '🔴 Bearish' : '⚪ Neutral'}
           </div>
         </div>
         <div className="text-xs text-muted-foreground">
-          Last update: {new Date(processedOrderBook.lastUpdate).toLocaleTimeString()}
+          Spread: {marketSpread.toFixed(3)} | Updated: {new Date(lastUpdate).toLocaleTimeString()}
         </div>
       </div>
 
@@ -320,85 +308,138 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
           </div>
           <div className="flex items-center justify-center gap-4 text-xs">
             <div className="flex items-center gap-1">
-              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-              <span>YES: ~{(processedOrderBook.asks.length > 0 ? parseFloat(processedOrderBook.asks[0].price) * 100 : 50).toFixed(1)}%</span>
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span>YES: ~{(yesToken?.orderBook.bids[0] ? (parseFloat(yesToken.orderBook.bids[0].price) * 100) : 50).toFixed(1)}%</span>
             </div>
             <div className="flex items-center gap-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              <span>NO: ~{(processedOrderBook.bids.length > 0 ? (1 - parseFloat(processedOrderBook.bids[0].price)) * 100 : 50).toFixed(1)}%</span>
+              <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+              <span>NO: ~{(noToken?.orderBook.bids[0] ? (parseFloat(noToken.orderBook.bids[0].price) * 100) : 50).toFixed(1)}%</span>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Column headers */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 text-xs font-medium text-muted-foreground">
-        <span className="min-w-0 flex-1">Probability</span>
-        <span className="min-w-[60px] text-right">Shares</span>
-        <span className="min-w-[50px] text-right">Total</span>
       </div>
 
       {/* Order book content */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {/* Asks (Sell Orders) - Top section */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="sticky top-0 bg-red-50/50 dark:bg-red-950/20 px-4 py-2 border-b border-red-200 dark:border-red-800">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-              <span className="text-xs font-semibold text-red-700 dark:text-red-300">YES OFFERS</span>
-              <span className="text-xs text-red-600 dark:text-red-400">({asks.length})</span>
-            </div>
-          </div>
-
-          <div className="flex flex-col">
-            {asks.length > 0 ? (
-              asks.slice(0, 15).map((ask, index) => (
-                <OrderBookRow
-                  key={`ask-${ask.price}-${index}`}
-                  level={ask}
-                  isBid={false}
-                  onClick={() => onPriceSelect(ask.price)}
-                  maxDepth={maxDepth}
-                  marketSentiment={marketSentiment}
-                  isBestAsk={index === 0}
-                />
-              ))
-            ) : (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No sell orders
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Bids (Buy Orders) - Bottom section */}
-        <div className="flex-1 overflow-y-auto border-t border-border">
+        {/* YES Token Section */}
+        <div className="flex-1 overflow-hidden flex flex-col border-b border-border">
           <div className="sticky top-0 bg-green-50/50 dark:bg-green-950/20 px-4 py-2 border-b border-green-200 dark:border-green-800">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-              <span className="text-xs font-semibold text-green-700 dark:text-green-300">NO OFFERS</span>
-              <span className="text-xs text-green-600 dark:text-green-400">({bids.length})</span>
+              <span className="text-xs font-semibold text-green-700 dark:text-green-300">YES POSITIONS</span>
+              {yesToken && (
+                <span className="text-xs text-green-600 dark:text-green-400">
+                  ({yesToken.orderBook.bids.length + yesToken.orderBook.asks.length})
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="flex flex-col">
-            {bids.length > 0 ? (
-              bids.slice(0, 15).map((bid, index) => (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {/* YES Sellers */}
+            <div className="flex-1 overflow-y-auto border-b border-border/30">
+              <div className="px-4 py-1 bg-red-50/30 dark:bg-red-950/10">
+                <span className="text-xs font-medium text-red-700 dark:text-red-300">Sellers (Offer YES shares)</span>
+              </div>
+              {yesToken?.orderBook.asks.slice(0, 8).map((ask, index) => (
                 <OrderBookRow
-                  key={`bid-${bid.price}-${index}`}
+                  key={`yes-ask-${ask.price}-${index}`}
+                  level={ask}
+                  isBid={false}
+                  onClick={() => onPriceSelect(ask.price)}
+                  maxDepth={yesToken.orderBook.maxDepth}
+                  marketSentiment={overallSentiment}
+                  isBestAsk={index === 0}
+                />
+              )) || (
+                <div className="px-4 py-2 text-xs text-muted-foreground text-center">
+                  No YES offers available
+                </div>
+              )}
+            </div>
+
+            {/* YES Buyers */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-4 py-1 bg-green-50/30 dark:bg-green-950/10">
+                <span className="text-xs font-medium text-green-700 dark:text-green-300">Buyers (Want YES shares)</span>
+              </div>
+              {yesToken?.orderBook.bids.slice(0, 8).map((bid, index) => (
+                <OrderBookRow
+                  key={`yes-bid-${bid.price}-${index}`}
                   level={bid}
                   isBid={true}
                   onClick={() => onPriceSelect(bid.price)}
-                  maxDepth={maxDepth}
-                  marketSentiment={marketSentiment}
+                  maxDepth={yesToken.orderBook.maxDepth}
+                  marketSentiment={overallSentiment}
                   isBestBid={index === 0}
                 />
-              ))
-            ) : (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No buy orders
+              )) || (
+                <div className="px-4 py-2 text-xs text-muted-foreground text-center">
+                  No YES bids available
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* NO Token Section */}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <div className="sticky top-0 bg-red-50/50 dark:bg-red-950/20 px-4 py-2 border-b border-red-200 dark:border-red-800">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+              <span className="text-xs font-semibold text-red-700 dark:text-red-300">NO POSITIONS</span>
+              {noToken && (
+                <span className="text-xs text-red-600 dark:text-red-400">
+                  ({noToken.orderBook.bids.length + noToken.orderBook.asks.length})
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {/* NO Sellers */}
+            <div className="flex-1 overflow-y-auto border-b border-border/30">
+              <div className="px-4 py-1 bg-red-50/30 dark:bg-red-950/10">
+                <span className="text-xs font-medium text-red-700 dark:text-red-300">Sellers (Offer NO shares)</span>
               </div>
-            )}
+              {noToken?.orderBook.asks.slice(0, 8).map((ask, index) => (
+                <OrderBookRow
+                  key={`no-ask-${ask.price}-${index}`}
+                  level={ask}
+                  isBid={false}
+                  onClick={() => onPriceSelect(ask.price)}
+                  maxDepth={noToken.orderBook.maxDepth}
+                  marketSentiment={overallSentiment}
+                  isBestAsk={index === 0}
+                />
+              )) || (
+                <div className="px-4 py-2 text-xs text-muted-foreground text-center">
+                  No NO offers available
+                </div>
+              )}
+            </div>
+
+            {/* NO Buyers */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-4 py-1 bg-green-50/30 dark:bg-green-950/10">
+                <span className="text-xs font-medium text-green-700 dark:text-green-300">Buyers (Want NO shares)</span>
+              </div>
+              {noToken?.orderBook.bids.slice(0, 8).map((bid, index) => (
+                <OrderBookRow
+                  key={`no-bid-${bid.price}-${index}`}
+                  level={bid}
+                  isBid={true}
+                  onClick={() => onPriceSelect(bid.price)}
+                  maxDepth={noToken.orderBook.maxDepth}
+                  marketSentiment={overallSentiment}
+                  isBestBid={index === 0}
+                />
+              )) || (
+                <div className="px-4 py-2 text-xs text-muted-foreground text-center">
+                  No NO bids available
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -408,40 +449,12 @@ export default function OrderBook({ marketId, onPriceSelect }: OrderBookProps) {
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <span className="text-purple-500">💡</span>
-            Available Shares: {(maxDepth / 1000).toFixed(1)}K
+            YES Depth: {((yesToken?.orderBook.maxDepth || 0) / 1000).toFixed(1)}K
           </span>
           <span className="flex items-center gap-1">
-            <span className="text-orange-500">👥</span>
-            Active Traders: {bids.length + asks.length}
+            <span className="text-orange-500">📊</span>
+            NO Depth: {((noToken?.orderBook.maxDepth || 0) / 1000).toFixed(1)}K
           </span>
-        </div>
-      </div>
-
-      {/* Order Flow Activity Indicator */}
-      <div className="border-t border-border bg-gradient-to-r from-muted/20 via-background to-muted/20 px-4 py-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-              <span className="text-xs text-muted-foreground">Live</span>
-            </div>
-
-            {/* Activity indicators */}
-            <div className="flex items-center gap-2 text-xs">
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-                Bids: {bids.length}
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
-                Asks: {asks.length}
-              </span>
-            </div>
-          </div>
-
-          <div className="text-xs text-muted-foreground">
-            Depth: {(maxDepth / 1000).toFixed(1)}K
-          </div>
         </div>
       </div>
     </div>

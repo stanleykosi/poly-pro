@@ -18,7 +18,7 @@
 "use client"
 
 import { create } from 'zustand'
-import { MarketData, WebSocketBookMessage, ProcessedOrderBook, OrderBookLevelWithDepth, OrderBookLevel } from '@/types'
+import { MarketData, WebSocketBookMessage, ProcessedOrderBook, OrderBookLevelWithDepth, OrderBookLevel, PolymarketOrderBook, TokenOrderBook } from '@/types'
 
 /**
  * @interface MarketState
@@ -33,10 +33,12 @@ import { MarketData, WebSocketBookMessage, ProcessedOrderBook, OrderBookLevelWit
  */
 interface MarketState {
   markets: Record<string, MarketData>
-  processedOrderBooks: Record<string, ProcessedOrderBook>
+  processedOrderBooks: Record<string, ProcessedOrderBook> // Legacy support
+  polymarketOrderBooks: Record<string, PolymarketOrderBook>
   setOrderBook: (marketId: string, message: WebSocketBookMessage) => void
   setOrderBookLoading: (marketId: string, isLoading: boolean) => void
-  getProcessedOrderBook: (marketId: string) => ProcessedOrderBook | null
+  getProcessedOrderBook: (marketId: string) => ProcessedOrderBook | null // Legacy support
+  getPolymarketOrderBook: (marketId: string) => PolymarketOrderBook | null
   generateMockOrderBook: (marketId: string, lastPrice?: number) => void
 }
 
@@ -156,86 +158,144 @@ const processOrderBook = (
 }
 
 /**
+ * @function calculateOverallSentiment
+ * @description Calculates overall market sentiment based on YES/NO token volumes and spreads.
+ */
+const calculateOverallSentiment = (polymarketOrderBook: PolymarketOrderBook): 'bullish' | 'bearish' | 'neutral' => {
+  const yesToken = polymarketOrderBook.yesToken
+  const noToken = polymarketOrderBook.noToken
+
+  if (!yesToken || !noToken) {
+    return 'neutral'
+  }
+
+  // Calculate total volume for each token
+  const yesVolume = yesToken.orderBook.bids.reduce((sum, bid) => sum + parseFloat(bid.size), 0) +
+    yesToken.orderBook.asks.reduce((sum, ask) => sum + parseFloat(ask.size), 0)
+
+  const noVolume = noToken.orderBook.bids.reduce((sum, bid) => sum + parseFloat(bid.size), 0) +
+    noToken.orderBook.asks.reduce((sum, ask) => sum + parseFloat(ask.size), 0)
+
+  // Volume ratio indicates market direction
+  const volumeRatio = yesVolume / (yesVolume + noVolume)
+
+  // Price spread indicates market efficiency/confidence
+  const spread = polymarketOrderBook.marketSpread
+
+  // High volume on YES + tight spread = bullish
+  // High volume on NO + tight spread = bearish
+  // Low volume or wide spread = neutral/uncertain
+
+  if (spread < 0.1) { // Tight spread = high confidence
+    if (volumeRatio > 0.6) return 'bullish'
+    if (volumeRatio < 0.4) return 'bearish'
+  }
+
+  return 'neutral'
+}
+
+/**
  * @function useMarketStore
  * @description Creates and exports the Zustand store for market data.
  */
 export const useMarketStore = create<MarketState>((set, get) => ({
   markets: {},
-  processedOrderBooks: {},
+  processedOrderBooks: {}, // Legacy support
+  polymarketOrderBooks: {},
 
   setOrderBook: (marketId, message) =>
     set((state) => {
-      const existingMarket = state.markets[marketId]
-      const newTimestamp = parseInt(message.timestamp, 10)
+      const tokenType = message.token_type || 'unknown'
+      const tokenId = message.asset_id
 
-      // Helper function to check if two order book arrays are different
-      const orderBooksDiffer = (
-        a: { price: string; size: string }[],
-        b: { price: string; size: string }[]
-      ): boolean => {
-        if (a.length !== b.length) return true
-        for (let i = 0; i < a.length; i++) {
-          if (a[i].price !== b[i].price || a[i].size !== b[i].size) {
-            return true
-          }
-        }
-        return false
-      }
-
-      // Check if data actually changed - compare bids, asks, and timestamp
-      if (existingMarket) {
-        const bidsChanged = orderBooksDiffer(
-          existingMarket.orderBook.bids,
-          message.bids || []
-        )
-        const asksChanged = orderBooksDiffer(
-          existingMarket.orderBook.asks,
-          message.asks || []
-        )
-        const timestampChanged = existingMarket.lastUpdate !== newTimestamp
-        const assetIdChanged = existingMarket.assetId !== message.asset_id
-
-        // Only skip update if nothing changed at all
-        if (!bidsChanged && !asksChanged && !timestampChanged && !assetIdChanged) {
-          return state
-        }
-      }
-
-      // Debug logging
-      console.log('[MarketStore] Received order book update:', {
+      console.log('[MarketStore] Processing order book update:', {
         marketId,
-        assetId: message.asset_id,
+        tokenType,
+        tokenId,
         bidsCount: message.bids?.length || 0,
-        asksCount: message.asks?.length || 0,
-        timestamp: message.timestamp,
+        asksCount: message.asks?.length || 0
       })
 
-      // Update raw market data
-      const updatedMarkets = {
-        ...state.markets,
-        [marketId]: {
-          marketId: message.market,
-          assetId: message.asset_id,
-          orderBook: {
-            bids: message.bids || [],
-            asks: message.asks || [],
-          },
-          lastUpdate: newTimestamp,
-        },
+      // Get existing polymarket order book or create new one
+      const existingPolymarketOrderBook = state.polymarketOrderBooks[marketId] || {
+        marketId,
+        yesToken: null,
+        noToken: null,
+        marketSpread: 0,
+        overallSentiment: 'neutral' as const,
+        isLoading: true,
+        lastUpdate: new Date().toISOString()
       }
 
-      // Process order book data
+      // Process the order book for this token
       const processedOrderBook = processOrderBook(
         message.bids || [],
-        message.asks || [],
-        state.processedOrderBooks[marketId]
+        message.asks || []
       )
 
+      // Create token order book entry
+      const tokenOrderBook: TokenOrderBook = {
+        tokenId,
+        tokenType: tokenType as 'yes' | 'no',
+        orderBook: processedOrderBook
+      }
+
+      // Update the appropriate token in the polymarket order book
+      let updatedPolymarketOrderBook = { ...existingPolymarketOrderBook }
+
+      if (tokenType === 'yes') {
+        updatedPolymarketOrderBook.yesToken = tokenOrderBook
+      } else if (tokenType === 'no') {
+        updatedPolymarketOrderBook.noToken = tokenOrderBook
+      }
+
+      // Calculate market spread (difference between YES and NO prices)
+      const yesBestBid = updatedPolymarketOrderBook.yesToken?.orderBook.bids[0]?.price
+      const noBestBid = updatedPolymarketOrderBook.noToken?.orderBook.bids[0]?.price
+
+      if (yesBestBid && noBestBid) {
+        const yesPrice = parseFloat(yesBestBid)
+        const noPrice = parseFloat(noBestBid)
+        updatedPolymarketOrderBook.marketSpread = Math.abs(yesPrice - noPrice)
+      }
+
+      // Calculate overall sentiment based on volume ratios
+      updatedPolymarketOrderBook.overallSentiment = calculateOverallSentiment(updatedPolymarketOrderBook)
+      updatedPolymarketOrderBook.isLoading = false
+      updatedPolymarketOrderBook.lastUpdate = new Date().toISOString()
+
+      // Legacy support: also update processedOrderBooks for backward compatibility
+      // Combine YES and NO data for legacy components
+      const combinedBids = [
+        ...(updatedPolymarketOrderBook.yesToken?.orderBook.bids || []),
+        ...(updatedPolymarketOrderBook.noToken?.orderBook.bids || [])
+      ].sort((a, b) => parseFloat(b.price) - parseFloat(a.price))
+
+      const combinedAsks = [
+        ...(updatedPolymarketOrderBook.yesToken?.orderBook.asks || []),
+        ...(updatedPolymarketOrderBook.noToken?.orderBook.asks || [])
+      ].sort((a, b) => parseFloat(a.price) - parseFloat(b.price))
+
+      const legacyProcessedOrderBook = processOrderBook(combinedBids, combinedAsks)
+
+      console.log('[MarketStore] Updated polymarket order book:', {
+        marketId,
+        hasYesToken: !!updatedPolymarketOrderBook.yesToken,
+        hasNoToken: !!updatedPolymarketOrderBook.noToken,
+        marketSpread: updatedPolymarketOrderBook.marketSpread,
+        overallSentiment: updatedPolymarketOrderBook.overallSentiment
+      })
+
       return {
-        markets: updatedMarkets,
+        ...state,
+        polymarketOrderBooks: {
+          ...state.polymarketOrderBooks,
+          [marketId]: updatedPolymarketOrderBook,
+        },
+        // Legacy support
         processedOrderBooks: {
           ...state.processedOrderBooks,
-          [marketId]: processedOrderBook,
+          [marketId]: legacyProcessedOrderBook,
         },
       }
     }),
@@ -299,6 +359,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       const mockMessage: WebSocketBookMessage = {
         event_type: 'book',
         asset_id: 'mock-asset-id',
+        token_type: 'unknown',
         market: marketId,
         bids: mockBids,
         asks: mockAsks,
@@ -328,6 +389,11 @@ export const useMarketStore = create<MarketState>((set, get) => ({
         },
       }
     })
+  },
+
+  getPolymarketOrderBook: (marketId) => {
+    const state = get()
+    return state.polymarketOrderBooks[marketId] || null
   },
 }))
 
