@@ -21,7 +21,7 @@
 
 'use client'
 
-import { useState, useEffect, FormEvent, useMemo } from 'react'
+import { useState, useEffect, FormEvent, useMemo, useCallback, useRef } from 'react'
 import { useApi } from '@/hooks/use-api'
 import { useMarketStore } from '@/lib/stores/market-store'
 import { createMarketService, OfficialMarketPrice } from '@/lib/services/market-service'
@@ -101,28 +101,63 @@ export default function PlaceOrderForm({
     }
   }, [side, marketId])
 
+  // Track if we've already attempted to fetch prices to prevent infinite retries
+  const [pricesFetchError, setPricesFetchError] = useState<string | null>(null)
+  const fetchingRef = useRef(false) // Track if fetch is in progress to prevent duplicate requests
+  const lastMarketIdRef = useRef<string | null>(null) // Track last marketId we fetched for
+
   // Fetch official market prices directly from Polymarket's Gamma API
-  const fetchOfficialPrices = async () => {
+  const fetchOfficialPrices = useCallback(async () => {
+    // Prevent duplicate simultaneous requests
+    if (fetchingRef.current) {
+      console.log('[PlaceOrderForm] Fetch already in progress, skipping')
+      return
+    }
+
+    // Don't refetch if we already fetched for this marketId
+    if (lastMarketIdRef.current === marketId && officialPrices.length > 0) {
+      console.log('[PlaceOrderForm] Prices already loaded for this market, skipping')
+      return
+    }
+
     console.log('[PlaceOrderForm] Fetching official market prices from Gamma API')
+    fetchingRef.current = true
     setOfficialPricesLoading(true)
+    setPricesFetchError(null)
 
     try {
       const prices = await marketService.getOfficialMarketPrices(marketId)
       setOfficialPrices(prices)
+      lastMarketIdRef.current = marketId
       console.log('[PlaceOrderForm] Official prices loaded from Gamma API:', prices)
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to fetch official prices'
       console.error('[PlaceOrderForm] Failed to fetch official prices:', error)
+      setPricesFetchError(errorMessage)
       // Keep empty array on error - we'll fall back gracefully
       setOfficialPrices([])
+      // Still mark as attempted so we don't retry immediately
+      lastMarketIdRef.current = marketId
     } finally {
       setOfficialPricesLoading(false)
+      fetchingRef.current = false
     }
-  }
+  }, [marketId, marketService, officialPrices.length])
 
   // Fetch official prices when component mounts or market changes
+  // Only fetch once per marketId, and don't retry on error
   useEffect(() => {
+    // Reset state when marketId changes
+    if (lastMarketIdRef.current !== marketId) {
+      setPricesFetchError(null)
+      setOfficialPrices([])
+      lastMarketIdRef.current = null
+    }
+
+    // Fetch prices for the new market
     fetchOfficialPrices()
-  }, [marketId, marketService])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketId]) // Only depend on marketId - fetchOfficialPrices is stable
 
   // Get best available prices from token-specific order books for market orders
   const bestBid = useMemo(() => {
