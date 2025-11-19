@@ -176,9 +176,16 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 	bar, exists := a.bars[marketID][resolution]
 	needsNewBar := !exists || bar.StartTime.Before(barStartTime)
 	
+	// Store the previous bar's close price to use as the new bar's open price
+	var previousClosePrice float64 = price // Default to current price if no previous bar
+	
 	if needsNewBar {
 		// If the bar doesn't exist or we've moved to a new time period, save the old bar and create a new one
 		if exists {
+			// Use the old bar's close price as the new bar's open price
+			// This ensures continuity - if there are no updates in the new period, we still have the last known price
+			previousClosePrice = bar.Close
+			
 			// Log when transitioning to a new time period
 			if a.totalBarsSaved < 20 || a.totalUpdates%100 == 0 {
 				a.logger.Info("🔄 transitioning to new time period",
@@ -187,24 +194,51 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 					"old_bar_start", bar.StartTime.Format("2006-01-02 15:04:05"),
 					"new_bar_start", barStartTime.Format("2006-01-02 15:04:05"),
 					"old_bar_count", bar.Count,
-					"old_bar_close", bar.Close)
+					"old_bar_close", bar.Close,
+					"new_bar_open", previousClosePrice)
 			}
 			if err := a.saveBar(bar); err != nil {
 				return err
 			}
+		} else {
+			// No previous bar exists - try to get last known price from database
+			// This helps when the service restarts and we don't have in-memory state
+			lastPrice, err := a.getLastKnownPrice(marketID, resolution, barStartTime)
+			if err == nil && lastPrice > 0 {
+				previousClosePrice = lastPrice
+				if a.totalUpdates <= 10 {
+					a.logger.Info("📊 using last known price from database for new bar",
+						"market_id", marketID,
+						"resolution", resolution,
+						"last_price", lastPrice)
+				}
+			}
 		}
 
 		// Create a new bar
+		// Use previousClosePrice as Open to maintain price continuity
+		// If there are no updates in this period, the bar will still reflect the last known price
 		bar = &CurrentBar{
 			MarketID:   marketID,
 			Resolution: resolution,
 			StartTime:  barStartTime,
-			Open:       price,
-			High:       price,
+			Open:       previousClosePrice,
+			High:       price, // Use current price for High/Low initially, will be updated
 			Low:        price,
 			Close:      price,
 			Volume:     volume, // Initialize with the first volume update
 			Count:      0,
+		}
+		// Ensure High and Low are set correctly based on Open and current price
+		if price > previousClosePrice {
+			bar.High = price
+			bar.Low = previousClosePrice
+		} else if price < previousClosePrice {
+			bar.High = previousClosePrice
+			bar.Low = price
+		} else {
+			bar.High = previousClosePrice
+			bar.Low = previousClosePrice
 		}
 		a.bars[marketID][resolution] = bar
 
@@ -216,7 +250,8 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 				"resolution", resolution,
 				"start_time", barStartTime.Format("2006-01-02 15:04:05"),
 				"end_time", barEndTime.Format("2006-01-02 15:04:05"),
-				"initial_price", price,
+				"open_price", previousClosePrice,
+				"current_price", price,
 				"initial_volume", volume)
 		}
 	}
@@ -687,6 +722,48 @@ func (a *OHLCVAggregator) flushCompletedBars() {
 		}
 		a.mu.Unlock()
 	}
+}
+
+// getLastKnownPrice retrieves the most recent close price for a market/resolution from the database.
+// This is used when creating a new bar after a service restart to maintain price continuity.
+func (a *OHLCVAggregator) getLastKnownPrice(marketID string, resolution string, beforeTime time.Time) (float64, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+	defer cancel()
+
+	// Query for the most recent bar before the given time
+	var timeStart, timeEnd pgtype.Timestamptz
+	timeStart.Scan(beforeTime.Add(-7 * 24 * time.Hour)) // Look back up to 7 days
+	timeEnd.Scan(beforeTime)
+
+	params := db.GetMarketPriceHistoryParams{
+		MarketID:   marketID,
+		Time:       timeStart,
+		Time_2:     timeEnd,
+		Resolution: resolution,
+	}
+
+	results, err := a.store.GetMarketPriceHistory(ctx, params)
+	if err != nil || len(results) == 0 {
+		return 0, fmt.Errorf("no previous price found: %w", err)
+	}
+
+	// Get the most recent result (should be sorted by time desc, but get the last one to be sure)
+	lastResult := results[len(results)-1]
+	
+	// Convert close price from pgtype.Numeric to float64
+	if !lastResult.Close.Valid {
+		return 0, fmt.Errorf("last price is invalid")
+	}
+
+	float8Val, err := lastResult.Close.Float64Value()
+	if err != nil {
+		return 0, fmt.Errorf("failed to convert close price to float64: %w", err)
+	}
+	if !float8Val.Valid {
+		return 0, fmt.Errorf("close price float64 value is invalid")
+	}
+
+	return float8Val.Float64, nil
 }
 
 // getBarEndTime calculates when a bar's time period ends based on its start time and resolution.
