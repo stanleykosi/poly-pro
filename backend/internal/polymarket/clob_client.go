@@ -29,7 +29,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -165,6 +167,168 @@ func (c *CLOBAPIClient) GetOrderBook(ctx context.Context, tokenID string) (*Orde
 	}
 
 	return &orderBook, nil
+}
+
+// parseFloat converts a string to float64, returning 0 on error
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
+}
+
+// GetOfficialMarketPrice calculates the official market price using Polymarket's formula
+// Returns the midpoint of bid-ask spread, or last traded price if spread > $0.10
+func (c *CLOBAPIClient) GetOfficialMarketPrice(ctx context.Context, tokenID string) (*MarketPrice, error) {
+	orderBook, err := c.GetOrderBook(ctx, tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get order book: %w", err)
+	}
+
+	// Find best bid and ask
+	var bestBid, bestAsk float64
+	var hasBid, hasAsk bool
+
+	if len(orderBook.Bids) > 0 {
+		if bidPrice, err := parseFloat(orderBook.Bids[0].Price); err == nil {
+			bestBid = bidPrice
+			hasBid = true
+		}
+	}
+
+	if len(orderBook.Asks) > 0 {
+		if askPrice, err := parseFloat(orderBook.Asks[0].Price); err == nil {
+			bestAsk = askPrice
+			hasAsk = true
+		}
+	}
+
+	if !hasBid || !hasAsk {
+		return nil, fmt.Errorf("insufficient order book data for token %s", tokenID)
+	}
+
+	// Calculate spread
+	spread := bestAsk - bestBid
+
+	// Polymarket's official price calculation:
+	// Use midpoint unless spread > $0.10, then should use last traded price
+	// For now, we'll use midpoint as primary method
+	marketPrice := (bestBid + bestAsk) / 2.0
+
+	// Check if we should use last traded price instead of midpoint
+	// Polymarket uses last traded price when spread > $0.10
+	finalPrice := marketPrice
+	priceSource := "midpoint"
+	lastTradedPrice := 0.0
+
+	if spread > 0.10 {
+		// Try to get last traded price
+		if lastTrade, err := c.GetLastTradedPrice(ctx, tokenID); err == nil && lastTrade > 0 {
+			finalPrice = lastTrade
+			priceSource = "last_traded"
+			lastTradedPrice = lastTrade
+			c.logger.Info("using last traded price due to wide spread",
+				"token_id", tokenID, "spread", spread, "last_trade", lastTrade)
+		} else {
+			c.logger.Warn("wide spread detected but could not get last traded price",
+				"token_id", tokenID, "spread", spread, "error", err)
+		}
+	}
+
+	return &MarketPrice{
+		TokenID:         tokenID,
+		BestBid:         bestBid,
+		BestAsk:         bestAsk,
+		Spread:          spread,
+		MarketPrice:     finalPrice,
+		LastTradedPrice: lastTradedPrice,
+		PriceSource:     priceSource,
+		LastUpdated:     orderBook.Timestamp,
+	}, nil
+}
+
+// MarketPrice represents the official market price for a token
+type MarketPrice struct {
+	TokenID         string  `json:"token_id"`
+	BestBid         float64 `json:"best_bid"`
+	BestAsk         float64 `json:"best_ask"`
+	Spread          float64 `json:"spread"`
+	MarketPrice     float64 `json:"market_price"` // Official price (midpoint or last traded)
+	LastTradedPrice float64 `json:"last_traded_price,omitempty"` // Last traded price if available
+	PriceSource     string  `json:"price_source"` // "midpoint" or "last_traded"
+	LastUpdated     string  `json:"last_updated"`
+}
+
+// Trade represents a trade from the Polymarket API
+type Trade struct {
+	ID             string `json:"id"`
+	Market         string `json:"market"`
+	AssetID        string `json:"asset_id"`
+	Side           string `json:"side"`
+	Size           string `json:"size"`
+	Price          string `json:"price"`
+	MatchTime      string `json:"match_time"`
+	LastUpdate     string `json:"last_update"`
+}
+
+// GetLastTradedPrice fetches the most recent trade price for a token
+func (c *CLOBAPIClient) GetLastTradedPrice(ctx context.Context, tokenID string) (float64, error) {
+	// Use the /data/trades endpoint to get recent trades for this token
+	// Get trades from the last hour to avoid too much data
+	oneHourAgo := time.Now().Add(-time.Hour).Unix()
+	apiURL := fmt.Sprintf("%s/data/trades?asset_id=%s&after=%d", c.baseURL, tokenID, oneHourAgo)
+
+	c.logger.Debug("fetching last traded price from CLOB API", "token_id", tokenID, "after", oneHourAgo)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "poly-pro-backend/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch trades: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("trades API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var trades []Trade
+	if err := json.Unmarshal(body, &trades); err != nil {
+		return 0, fmt.Errorf("failed to parse trades response: %w", err)
+	}
+
+	if len(trades) == 0 {
+		return 0, fmt.Errorf("no trades found for token %s", tokenID)
+	}
+
+	// Sort trades by match time to find the most recent
+	// Assuming match_time is a unix timestamp string
+	sort.Slice(trades, func(i, j int) bool {
+		timeI, errI := strconv.ParseInt(trades[i].MatchTime, 10, 64)
+		timeJ, errJ := strconv.ParseInt(trades[j].MatchTime, 10, 64)
+		if errI != nil || errJ != nil {
+			return false // Keep original order if parsing fails
+		}
+		return timeI > timeJ // Sort descending (most recent first)
+	})
+
+	// Get the most recent trade
+	lastTrade := trades[0]
+	price, err := parseFloat(lastTrade.Price)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse trade price: %w", err)
+	}
+
+	c.logger.Debug("found last traded price", "token_id", tokenID, "price", price, "trade_id", lastTrade.ID)
+	return price, nil
 }
 
 // PostOrder submits a signed order to the CLOB API

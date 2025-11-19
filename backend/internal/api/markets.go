@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/poly-pro/backend/internal/polymarket"
@@ -213,5 +214,111 @@ func (server *Server) listMarkets(c *gin.Context) {
 			"offset": offset,
 		},
 	})
+}
+
+/**
+ * @function getOfficialMarketPrices
+ * @description A Gin handler that fetches official market prices directly from Polymarket's Gamma API.
+ * Uses the Token.price field from the Gamma API which already contains Polymarket's official prices.
+ * @param {gin.Context} c - The Gin context containing the request.
+ */
+func (server *Server) getOfficialMarketPrices(c *gin.Context) {
+	// Get market ID from query parameter
+	marketID := c.Query("market_id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"message": "market_id parameter is required",
+		})
+		return
+	}
+
+	// Fetch market from Gamma API which includes the official prices
+	gammaMarket, err := server.gammaClient.GetMarketByConditionID(c.Request.Context(), marketID)
+	if err != nil {
+		server.logger.Warn("failed to fetch market from Gamma API", "market_id", marketID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"message": "Failed to fetch market data",
+		})
+		return
+	}
+
+	// Extract prices from the tokens array
+	prices := make([]polymarket.MarketPrice, 0, len(gammaMarket.Tokens))
+
+	for _, token := range gammaMarket.Tokens {
+		if token.TokenID == "" || token.Price == "" {
+			continue
+		}
+
+		price, err := parseFloat(token.Price)
+		if err != nil {
+			server.logger.Warn("failed to parse token price", "token_id", token.TokenID, "price", token.Price, "error", err)
+			continue
+		}
+
+		// Create market price using direct Gamma API data
+		marketPrice := polymarket.MarketPrice{
+			TokenID:     token.TokenID,
+			BestBid:     price, // Gamma API gives us the market price directly
+			BestAsk:     price, // Gamma API gives us the market price directly
+			Spread:      0,     // Not available from Gamma API
+			MarketPrice: price, // This is the official Polymarket price
+			PriceSource: "gamma_api", // Direct from Polymarket's Gamma API
+			LastUpdated: gammaMarket.UpdatedAt,
+		}
+		prices = append(prices, marketPrice)
+	}
+
+	if len(prices) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"message": "No valid prices found for market",
+		})
+		return
+	}
+
+	server.logger.Info("successfully fetched official market prices from Gamma API", "market_id", marketID, "price_count", len(prices))
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   prices,
+		"meta": gin.H{
+			"market_id": marketID,
+			"returned_prices": len(prices),
+			"source": "gamma_api",
+		},
+	})
+}
+
+/**
+ * @function parseTokenIDs
+ * @description Parses token IDs from a comma-separated string.
+ * @param {string} tokenIDsParam - Comma-separated string of token IDs.
+ * @returns {[]string} Array of token IDs.
+ */
+func parseTokenIDs(tokenIDsParam string) []string {
+	if tokenIDsParam == "" {
+		return []string{}
+	}
+
+	// Split by comma and trim whitespace
+	parts := strings.Split(tokenIDsParam, ",")
+	tokenIDs := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			tokenIDs = append(tokenIDs, trimmed)
+		}
+	}
+
+	return tokenIDs
+}
+
+// parseFloat converts a string to float64, returning 0 on error
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
 

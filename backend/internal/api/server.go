@@ -45,6 +45,7 @@ type Server struct {
 	redisClient         *redis.Client
 	gammaClient         *polymarket.GammaAPIClient
 	dataClient          *polymarket.DataAPIClient
+	clobClient          *polymarket.CLOBAPIClient
 }
 
 /**
@@ -77,6 +78,9 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 	// Initialize Data API client
 	dataClient := polymarket.NewDataAPIClient(config.DataAPIURL, logger)
 
+	// Initialize CLOB API client
+	clobClient := polymarket.NewCLOBAPIClient(config.CLOBAPIURL, config.CLOBAPIKey, config.CLOBAPISecret, config.CLOBAPIPassphrase, logger)
+
 	// Initialize vault service for secure private key storage
 	vaultService := services.NewInMemoryVaultService(logger)
 
@@ -104,6 +108,7 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 		redisClient:         redisClient,
 		gammaClient:         gammaClient,
 		dataClient:          dataClient,
+		clobClient:          clobClient,
 	}
 
 	// Initialize the Gin router with default middleware (logger and recovery)
@@ -191,6 +196,10 @@ func NewServer(ctx context.Context, config config.Config, store db.Querier, redi
 
 		// Endpoint to get static details for a market. This is public data.
 		v1.GET("/markets/:id", server.getMarketDetails)
+
+		// Endpoint to get official market prices from Polymarket's CLOB API
+		v1.POST("/markets/prices", server.getOfficialMarketPrices)
+		v1.GET("/markets/prices", server.getOfficialMarketPrices)
 
 		// Webhook routes are public but should have their own verification logic.
 		webhookGroup := v1.Group("/webhooks")

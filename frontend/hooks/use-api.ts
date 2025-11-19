@@ -48,7 +48,7 @@ import api from '@/lib/api'
 import { AxiosRequestConfig, AxiosResponse } from 'axios'
 
 // Define the structure of the API client returned by the hook.
-interface ApiClient {
+export interface ApiClient {
   get: <T = any>(
     url: string,
     config?: AxiosRequestConfig

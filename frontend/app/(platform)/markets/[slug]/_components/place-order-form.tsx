@@ -24,6 +24,7 @@
 import { useState, useEffect, FormEvent, useMemo } from 'react'
 import { useApi } from '@/hooks/use-api'
 import { useMarketStore } from '@/lib/stores/market-store'
+import { createMarketService, OfficialMarketPrice } from '@/lib/services/market-service'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -61,9 +62,12 @@ export default function PlaceOrderForm({
   const [success, setSuccess] = useState<string | null>(null)
 
   const api = useApi()
+  const marketService = useMemo(() => createMarketService(api), [api])
   const polymarketOrderBook = useMarketStore((s) => s.getPolymarketOrderBook(marketId))
   const [userPositions, setUserPositions] = useState<any[]>([])
   const [positionsLoading, setPositionsLoading] = useState(false)
+  const [officialPrices, setOfficialPrices] = useState<OfficialMarketPrice[]>([])
+  const [officialPricesLoading, setOfficialPricesLoading] = useState(false)
 
   // Check if we're in sandbox/test environment
   const isSandbox = useMemo(() => {
@@ -96,6 +100,29 @@ export default function PlaceOrderForm({
       fetchUserPositions()
     }
   }, [side, marketId])
+
+  // Fetch official market prices directly from Polymarket's Gamma API
+  const fetchOfficialPrices = async () => {
+    console.log('[PlaceOrderForm] Fetching official market prices from Gamma API')
+    setOfficialPricesLoading(true)
+
+    try {
+      const prices = await marketService.getOfficialMarketPrices(marketId)
+      setOfficialPrices(prices)
+      console.log('[PlaceOrderForm] Official prices loaded from Gamma API:', prices)
+    } catch (error) {
+      console.error('[PlaceOrderForm] Failed to fetch official prices:', error)
+      // Keep empty array on error - we'll fall back gracefully
+      setOfficialPrices([])
+    } finally {
+      setOfficialPricesLoading(false)
+    }
+  }
+
+  // Fetch official prices when component mounts or market changes
+  useEffect(() => {
+    fetchOfficialPrices()
+  }, [marketId, marketService])
 
   // Get best available prices from token-specific order books for market orders
   const bestBid = useMemo(() => {
@@ -211,88 +238,6 @@ export default function PlaceOrderForm({
     return undefined
   }, [side, yesTokenId, noTokenId])
 
-  // Calculate cost, payout, and profit based on Polymarket's pricing model
-  const { cost, payout, profit, profitLabel, hasPositions } = useMemo(() => {
-    const priceNum = parseFloat(price) || 0
-    const sizeNum = parseFloat(size) || 0
-
-    if (priceNum <= 0 || sizeNum <= 0 || isNaN(priceNum) || isNaN(sizeNum)) {
-      return { cost: 0, payout: 0, profit: 0, profitLabel: 'Profit', hasPositions: false }
-    }
-
-    if (side === 'BUY_YES' || side === 'BUY_NO') {
-      // For buying: cost = size * price, payout = size if outcome wins ($1 per share)
-      const calculatedCost = sizeNum * priceNum
-      const calculatedPayout = sizeNum // If the outcome wins, you get $1 per share
-      const calculatedProfit = calculatedPayout - calculatedCost
-
-      let label = 'Profit'
-      if (side === 'BUY_YES') {
-        label = 'Profit if YES wins'
-      } else {
-        label = 'Profit if NO wins'
-      }
-
-      return {
-        cost: calculatedCost,
-        payout: calculatedPayout,
-        profit: calculatedProfit,
-        profitLabel: label,
-        hasPositions: false,
-      }
-    } else {
-      // For selling: calculate based on user's actual positions
-      if (userPositions.length === 0) {
-        // No positions - show simplified calculation
-        const receivedAmount = sizeNum * priceNum
-        const potentialPayout = sizeNum
-        return {
-          cost: potentialPayout - receivedAmount,
-          payout: receivedAmount,
-          profit: receivedAmount - potentialPayout,
-          profitLabel: 'Net (no positions found)',
-          hasPositions: false,
-        }
-      }
-
-      // Calculate profit/loss based on user's positions
-      let totalCostBasis = 0
-      let totalSharesToSell = sizeNum
-      let actualProfit = 0
-
-      // Sort positions by average price (sell most expensive first)
-      const sortedPositions = [...userPositions].sort((a, b) => b.avg_price - a.avg_price)
-
-      for (const position of sortedPositions) {
-        if (totalSharesToSell <= 0) break
-
-        const sharesFromThisPosition = Math.min(totalSharesToSell, parseFloat(position.total_size))
-        const costBasisForTheseShares = sharesFromThisPosition * parseFloat(position.avg_price)
-
-        totalCostBasis += costBasisForTheseShares
-        totalSharesToSell -= sharesFromThisPosition
-
-        // If this is a YES position, profit = sell_price - buy_price
-        // If this is a NO position, profit = sell_price - (1 - buy_price)
-        // because NO tokens cost (1 - YES_price) but payout $1 if NO wins
-        if (position.side === 'BUY') {
-          // This is the cost basis we paid, now selling at current price
-          actualProfit += sharesFromThisPosition * (priceNum - parseFloat(position.avg_price))
-        }
-      }
-
-      const receivedAmount = sizeNum * priceNum
-
-      return {
-        cost: totalCostBasis,
-        payout: receivedAmount,
-        profit: actualProfit,
-        profitLabel: `Realized P&L (${userPositions.length} position${userPositions.length !== 1 ? 's' : ''})`,
-        hasPositions: true,
-      }
-    }
-  }, [price, size, side, userPositions])
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
@@ -388,31 +333,127 @@ export default function PlaceOrderForm({
     return 'secondary' // Orange for sell
   }, [side])
 
-  // Market price display - differentiate YES/NO shares
+  // Get official market price for the current side (direct from Gamma API)
+  const currentOfficialPrice = useMemo(() => {
+    let targetTokenId = null
+
+    if (side === 'BUY_YES' && yesTokenId) {
+      targetTokenId = yesTokenId
+    } else if (side === 'BUY_NO' && noTokenId) {
+      targetTokenId = noTokenId
+    } else if (side === 'SELL') {
+      // For selling, use YES token as default (can be enhanced with position logic)
+      targetTokenId = yesTokenId
+    }
+
+    if (targetTokenId) {
+      const officialPrice = officialPrices.find(p => p.token_id === targetTokenId)
+      if (officialPrice) {
+        return officialPrice.market_price // Direct from Polymarket's Gamma API
+      }
+    }
+
+    return null
+  }, [side, officialPrices, yesTokenId, noTokenId])
+
+  // Market price display - uses official Polymarket prices from Gamma API
   const marketPriceDisplay = useMemo(() => {
-    if (orderType === 'MARKET') {
-      if (side === 'BUY_YES') {
-        // For YES shares, use the ask price (what you pay to buy YES)
-        if (bestAsk !== null) {
-          return '$' + bestAsk.toFixed(2)
-        }
-      } else if (side === 'BUY_NO') {
-        // For NO shares, in a real implementation this would be the price of NO tokens
-        // For now, we'll use a derived price: if YES is at price P, NO should be at price (1-P)
-        // But since we only have one order book, we'll simulate this
-        if (bestAsk !== null) {
-          const noPrice = Math.max(0.001, Math.min(0.999, 1 - bestAsk))
-          return '$' + noPrice.toFixed(2)
-        }
-      } else {
-        // For selling, use the bid price (what you get when selling)
-        if (bestBid !== null) {
-          return '$' + bestBid.toFixed(2)
-        }
+    if (orderType === 'MARKET' && currentOfficialPrice !== null) {
+      return {
+        price: `$${currentOfficialPrice.toFixed(4)}`,
+        source: 'gamma_api' // Direct from Polymarket's Gamma API
       }
     }
     return null
-  }, [orderType, side, bestAsk, bestBid])
+  }, [orderType, currentOfficialPrice])
+
+  // Calculate cost, payout, and profit based on Polymarket's pricing model using official prices
+  const { cost, payout, profit, profitLabel, hasPositions } = useMemo(() => {
+    const sizeNum = parseFloat(size) || 0
+
+    if (sizeNum <= 0 || isNaN(sizeNum)) {
+      return { cost: 0, payout: 0, profit: 0, profitLabel: 'Profit', hasPositions: false }
+    }
+
+    // Use official market price from Gamma API for all calculations
+    const calculationPrice = currentOfficialPrice !== null ? currentOfficialPrice : (parseFloat(price) || 0)
+
+    if (calculationPrice <= 0) {
+      return { cost: 0, payout: 0, profit: 0, profitLabel: 'Profit', hasPositions: false }
+    }
+
+    if (side === 'BUY_YES' || side === 'BUY_NO') {
+      // For buying: cost = size * official_price, payout = size if outcome wins ($1 per share)
+      const calculatedCost = sizeNum * calculationPrice
+      const calculatedPayout = sizeNum // If the outcome wins, you get $1 per share
+      const calculatedProfit = calculatedPayout - calculatedCost
+
+      let label = 'Potential Profit'
+      if (side === 'BUY_YES') {
+        label = 'Profit if YES wins'
+      } else {
+        label = 'Profit if NO wins'
+      }
+
+      return {
+        cost: calculatedCost,
+        payout: calculatedPayout,
+        profit: calculatedProfit,
+        profitLabel: label,
+        hasPositions: false,
+      }
+    } else {
+      // For selling: calculate based on user's actual positions
+      if (userPositions.length === 0) {
+        // No positions - show simplified calculation using official price
+        const receivedAmount = sizeNum * calculationPrice
+        const potentialPayout = sizeNum // What they originally paid
+        return {
+          cost: potentialPayout,
+          payout: receivedAmount,
+          profit: receivedAmount - potentialPayout,
+          profitLabel: 'Net (no positions found)',
+          hasPositions: false,
+        }
+      }
+
+      // Calculate profit/loss based on user's positions
+      let totalCostBasis = 0
+      let totalSharesToSell = sizeNum
+      let actualProfit = 0
+
+      // Sort positions by average price (sell most expensive first)
+      const sortedPositions = [...userPositions].sort((a, b) => b.avg_price - a.avg_price)
+
+      for (const position of sortedPositions) {
+        if (totalSharesToSell <= 0) break
+
+        const sharesFromThisPosition = Math.min(totalSharesToSell, parseFloat(position.total_size))
+        const costBasisForTheseShares = sharesFromThisPosition * parseFloat(position.avg_price)
+
+        totalCostBasis += costBasisForTheseShares
+        totalSharesToSell -= sharesFromThisPosition
+
+        // If this is a YES position, profit = sell_price - buy_price
+        // If this is a NO position, profit = sell_price - (1 - buy_price)
+        // because NO tokens cost (1 - YES_price) but payout $1 if NO wins
+        if (position.side === 'BUY') {
+          // This is the cost basis we paid, now selling at official market price
+          actualProfit += sharesFromThisPosition * (calculationPrice - parseFloat(position.avg_price))
+        }
+      }
+
+      const receivedAmount = sizeNum * calculationPrice
+
+      return {
+        cost: totalCostBasis,
+        payout: receivedAmount,
+        profit: actualProfit,
+        profitLabel: `Realized P&L (${userPositions.length} position${userPositions.length !== 1 ? 's' : ''})`,
+        hasPositions: true,
+      }
+    }
+  }, [price, size, side, userPositions, currentOfficialPrice])
 
   return (
     <div className="w-full">
@@ -501,7 +542,7 @@ export default function PlaceOrderForm({
                 step="0.0001"
                 min="0.0001"
                 max="0.9999"
-                value={price}
+                value={orderType === 'MARKET' ? (currentOfficialPrice?.toString() || '') : price}
                 onChange={(e) => setPrice(e.target.value)}
                 placeholder="0.0000"
                 className="pr-12"
@@ -513,10 +554,22 @@ export default function PlaceOrderForm({
               </span>
             </div>
             {orderType === 'MARKET' && (
-              <p className="text-xs text-muted-foreground">
-                {marketPriceDisplay
-                  ? `Market: ${marketPriceDisplay}`
-                  : 'Waiting for market data...'}
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                {officialPricesLoading ? (
+                  <>
+                    <div className="w-3 h-3 border border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin"></div>
+                    Loading official market price...
+                  </>
+                ) : marketPriceDisplay ? (
+                  <>
+                    Official Market Price: {marketPriceDisplay.price}
+                    <span className="text-xs opacity-70">
+                      (Polymarket Gamma API)
+                    </span>
+                  </>
+                ) : (
+                  'Official market price unavailable'
+                )}
               </p>
             )}
           </div>
@@ -620,6 +673,9 @@ export default function PlaceOrderForm({
                     }`}
                 >
                   {profit >= 0 ? '+' : ''}${profit.toFixed(2)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Based on official market prices
                 </p>
               </div>
             </div>
