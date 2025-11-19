@@ -37,14 +37,15 @@ import (
 
 // MarketStreamService is responsible for streaming market data and publishing it.
 type MarketStreamService struct {
-	redisClient     *redis.Client
-	logger          *slog.Logger
-	ctx             context.Context
-	wsClient        *polymarket.CLOBWebSocketClient
-	config          config.Config
-	ohlcvAggregator *OHLCVAggregator
-	gammaClient     *polymarket.GammaAPIClient
-	tokenMap        map[string]map[string]string // condition_id -> token_id -> token_type ("yes" or "no")
+	redisClient      *redis.Client
+	logger           *slog.Logger
+	ctx              context.Context
+	wsClient         *polymarket.CLOBWebSocketClient
+	config           config.Config
+	ohlcvAggregator  *OHLCVAggregator
+	gammaClient      *polymarket.GammaAPIClient
+	tokenMap         map[string]map[string]string // condition_id -> token_id -> token_type ("yes" or "no")
+	lastTradedPrices map[string]float64            // asset_id -> last_traded_price (tracked from last_trade_price events)
 }
 
 // OrderBookLevel represents a single price level in the order book.
@@ -77,14 +78,15 @@ func NewMarketStreamService(ctx context.Context, logger *slog.Logger, redisClien
 	ohlcvAggregator := NewOHLCVAggregator(ctx, logger, store)
 
 	return &MarketStreamService{
-		redisClient:     redisClient,
-		logger:          logger,
-		ctx:             ctx,
-		wsClient:        wsClient,
-		config:          cfg,
-		ohlcvAggregator: ohlcvAggregator,
-		gammaClient:     gammaClient,
-		tokenMap:        make(map[string]map[string]string),
+		redisClient:      redisClient,
+		logger:           logger,
+		ctx:              ctx,
+		wsClient:         wsClient,
+		config:           cfg,
+		ohlcvAggregator:  ohlcvAggregator,
+		gammaClient:      gammaClient,
+		tokenMap:         make(map[string]map[string]string),
+		lastTradedPrices: make(map[string]float64),
 	}
 }
 
@@ -441,6 +443,26 @@ func (s *MarketStreamService) RunStream() {
 		midPrice, spread := ExtractMidPrice(bids, asks)
 		volume := ExtractVolumeWithLogging(bids, asks, s.logger, messageCount) // Extract volume (0 for order book updates, actual size for trades)
 
+		// Detect if this is a trade event (last_trade_price converted to BookMessage)
+		// Trade events have identical bid and ask prices/sizes
+		isTradeEvent := volume > 0 && len(validBids) == 1 && len(validAsks) == 1 &&
+			validBids[0].Price == validAsks[0].Price && validBids[0].Size == validAsks[0].Size
+		
+		// Track last traded price from trade events
+		// This is used when spread > 0.10 per Polymarket's pricing rules
+		if isTradeEvent && shouldAggregateOHLCV {
+			if tradePrice, err := strconv.ParseFloat(validBids[0].Price, 64); err == nil {
+				s.lastTradedPrices[bookMsg.AssetID] = tradePrice
+				if messageCount <= 20 || messageCount%1000 == 0 {
+					s.logger.Info("💰 tracked last traded price from trade event",
+						"condition_id", conditionID,
+						"asset_id", bookMsg.AssetID,
+						"last_traded_price", tradePrice,
+						"message_count", messageCount)
+				}
+			}
+		}
+
 		// CRITICAL: For YES tokens in active markets, we MUST have both bid and ask to calculate valid mid-price
 		// Single-sided order books are unreliable and shouldn't be used for OHLCV aggregation
 		hasBothSides := len(validBids) > 0 && len(validAsks) > 0
@@ -528,10 +550,47 @@ func (s *MarketStreamService) RunStream() {
 				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
 				// YES token represents the market's implied probability
 				if shouldAggregateOHLCV {
+					// POLYMARKET RULE: Use last traded price when spread > $0.10
+					// Per Polymarket docs: "The prices displayed are the midpoint of the bid-ask spread
+					// in the orderbook — unless that spread is over $0.10, in which case the last traded price is used."
+					finalPrice := midPrice
+					priceSource := "midpoint"
+					
+					if spread > 0.10 {
+						// Wide spread detected - use last traded price if available
+						if lastTradedPrice, hasLastTrade := s.lastTradedPrices[bookMsg.AssetID]; hasLastTrade && lastTradedPrice > 0 {
+							finalPrice = lastTradedPrice
+							priceSource = "last_traded"
+							if messageCount <= 20 || messageCount%1000 == 0 {
+								s.logger.Info("✅ using last traded price due to wide spread (Polymarket rule)",
+									"condition_id", conditionID,
+									"asset_id", bookMsg.AssetID,
+									"spread", spread,
+									"mid_price", midPrice,
+									"last_traded_price", lastTradedPrice,
+									"message_count", messageCount)
+							}
+						} else {
+							// Wide spread but no last traded price available - log warning and skip this update
+							// We can't use mid-price when spread is too wide (would give incorrect 0.5 prices)
+							if messageCount <= 20 || messageCount%1000 == 0 {
+								s.logger.Warn("⚠️  wide spread detected but no last traded price available - skipping update",
+									"condition_id", conditionID,
+									"asset_id", bookMsg.AssetID,
+									"spread", spread,
+									"mid_price", midPrice,
+									"message_count", messageCount)
+							}
+							// Skip this update - don't use unreliable mid-price when spread is too wide
+							return nil
+						}
+					}
+					
 					// CRITICAL VALIDATION: Reject prices exactly at 0.5 for YES tokens in active markets
 					// Top 100 markets by volume should NOT have YES prices at exactly 0.5 (perfectly balanced)
 					// This is a strong indicator of incorrect token identification or invalid price data
-					if midPrice >= 0.499 && midPrice <= 0.501 {
+					// BUT: Allow 0.5 if it came from a valid last traded price (unlikely but possible)
+					if finalPrice >= 0.499 && finalPrice <= 0.501 && priceSource == "midpoint" {
 						var bestBidStr, bestAskStr string
 						if len(validBids) > 0 {
 							bestBidStr = validBids[0].Price
@@ -543,7 +602,7 @@ func (s *MarketStreamService) RunStream() {
 						} else {
 							bestAskStr = "none"
 						}
-						s.logger.Error("❌ REJECTED: YES token price is exactly 0.5 - likely invalid data or wrong token",
+						s.logger.Error("❌ REJECTED: YES token price is exactly 0.5 from midpoint - likely invalid data or wrong token",
 							"condition_id", conditionID,
 							"asset_id", bookMsg.AssetID,
 							"token_type", tokenType,
@@ -557,28 +616,21 @@ func (s *MarketStreamService) RunStream() {
 						return nil
 					}
 					
-					// Log wide spreads (Polymarket uses last traded price when spread > 0.10)
-					if spread > 0.10 && (messageCount <= 10 || messageCount%1000 == 0) {
-						s.logger.Warn("⚠️  wide spread detected, consider using last traded price",
-							"condition_id", conditionID,
-							"spread", spread,
-							"mid_price", midPrice,
-							"message_count", messageCount)
-					}
-					
 					// Log first few OHLCV updates to confirm aggregation is working
 					if messageCount <= 10 || messageCount%100 == 0 {
 						s.logger.Info("📊 aggregating OHLCV for YES token", 
 							"condition_id", conditionID, 
 							"asset_id", bookMsg.AssetID, 
-							"price", midPrice,
+							"price", finalPrice,
+							"price_source", priceSource,
+							"mid_price", midPrice,
 							"spread", spread,
 							"volume", volume,
 							"is_trade", volume > 0,
 							"token_type", tokenType,
 							"message_count", messageCount)
 					}
-					if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
+					if err := s.ohlcvAggregator.UpdatePrice(conditionID, finalPrice, volume, timestamp); err != nil {
 						s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID, "token_type", tokenType)
 					}
 				} else {
