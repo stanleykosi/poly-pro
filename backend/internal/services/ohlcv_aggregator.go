@@ -174,9 +174,21 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 
 	// Get or create the current bar
 	bar, exists := a.bars[marketID][resolution]
-	if !exists || bar.StartTime.Before(barStartTime) {
+	needsNewBar := !exists || bar.StartTime.Before(barStartTime)
+	
+	if needsNewBar {
 		// If the bar doesn't exist or we've moved to a new time period, save the old bar and create a new one
 		if exists {
+			// Log when transitioning to a new time period
+			if a.totalBarsSaved < 20 || a.totalUpdates%100 == 0 {
+				a.logger.Info("🔄 transitioning to new time period",
+					"market_id", marketID,
+					"resolution", resolution,
+					"old_bar_start", bar.StartTime.Format("2006-01-02 15:04:05"),
+					"new_bar_start", barStartTime.Format("2006-01-02 15:04:05"),
+					"old_bar_count", bar.Count,
+					"old_bar_close", bar.Close)
+			}
 			if err := a.saveBar(bar); err != nil {
 				return err
 			}
@@ -196,15 +208,16 @@ func (a *OHLCVAggregator) updateBarForResolution(marketID string, resolution str
 		}
 		a.bars[marketID][resolution] = bar
 
-		// Log new bar creation only for first few bars per resolution type
-		if a.totalBarsSaved < 10 {
+		// Log new bar creation (more frequently to debug)
+		if a.totalBarsSaved < 20 || a.totalUpdates%100 == 0 {
 			barEndTime := a.getBarEndTime(barStartTime, resolution)
 			a.logger.Info("🆕 created new OHLCV bar",
 				"market_id", marketID,
 				"resolution", resolution,
 				"start_time", barStartTime.Format("2006-01-02 15:04:05"),
 				"end_time", barEndTime.Format("2006-01-02 15:04:05"),
-				"initial_price", price)
+				"initial_price", price,
+				"initial_volume", volume)
 		}
 	}
 
@@ -371,8 +384,10 @@ func (a *OHLCVAggregator) FlushAll() error {
 }
 
 // ExtractMidPrice extracts the mid-price from order book data (bids and asks).
-// Returns the average of the best bid and best ask, or 0 if no data is available.
-func ExtractMidPrice(bids []interface{}, asks []interface{}) float64 {
+// According to Polymarket docs: "The prices displayed are the midpoint of the bid-ask spread 
+// in the orderbook — unless that spread is over $0.10, in which case the last traded price is used."
+// Returns the calculated price, or 0 if no data is available.
+func ExtractMidPrice(bids []interface{}, asks []interface{}) (float64, float64) {
 	var bestBid, bestAsk float64
 	var hasBid, hasAsk bool
 
@@ -400,47 +415,54 @@ func ExtractMidPrice(bids []interface{}, asks []interface{}) float64 {
 		}
 	}
 
-
-	// Calculate mid-price
+	// Calculate mid-price and spread
 	if hasBid && hasAsk {
-		return (bestBid + bestAsk) / 2.0
+		spread := bestAsk - bestBid
+		midPrice := (bestBid + bestAsk) / 2.0
+		return midPrice, spread
 	} else if hasBid {
-		return bestBid
+		return bestBid, 0
 	} else if hasAsk {
-		return bestAsk
+		return bestAsk, 0
 	}
 
-	return 0
+	return 0, 0
 }
 
-// ExtractVolume extracts volume from order book data (sum of sizes from bids and asks).
-// This provides a proxy for market liquidity/volume based on available order sizes.
+// ExtractVolume extracts volume from order book data.
+// IMPORTANT: For OHLCV, volume should represent actual trading volume, not order book depth.
+// Order book updates don't represent trades, so we use minimal volume (or 0) for price tracking.
+// Actual trade volume comes from last_trade_price events which have the trade size.
+// This function checks if the message represents a trade (same price and size in bid/ask) 
+// or just an order book update.
 func ExtractVolume(bids []interface{}, asks []interface{}) float64 {
-	var totalVolume float64
-
-	// Sum sizes from bids
-	for _, bidInterface := range bids {
-		if bidMap, ok := bidInterface.(map[string]interface{}); ok {
-			if sizeStr, ok := bidMap["size"].(string); ok {
-				if size, err := parseFloat(sizeStr); err == nil {
-					totalVolume += size
+	// Check if this looks like a trade event (same price and size in both bid and ask)
+	// Trade events from last_trade_price are converted to book messages with identical bid/ask
+	if len(bids) == 1 && len(asks) == 1 {
+		bidMap, bidOk := bids[0].(map[string]interface{})
+		askMap, askOk := asks[0].(map[string]interface{})
+		
+		if bidOk && askOk {
+			bidPrice, bidPriceOk := bidMap["price"].(string)
+			bidSize, bidSizeOk := bidMap["size"].(string)
+			askPrice, askPriceOk := askMap["price"].(string)
+			askSize, askSizeOk := askMap["size"].(string)
+			
+			// If bid and ask have same price and size, this is likely a trade event
+			if bidPriceOk && bidSizeOk && askPriceOk && askSizeOk &&
+				bidPrice == askPrice && bidSize == askSize {
+				// This is a trade event - use the trade size as volume
+				if size, err := parseFloat(bidSize); err == nil {
+					return size
 				}
 			}
 		}
 	}
-
-	// Sum sizes from asks
-	for _, askInterface := range asks {
-		if askMap, ok := askInterface.(map[string]interface{}); ok {
-			if sizeStr, ok := askMap["size"].(string); ok {
-				if size, err := parseFloat(sizeStr); err == nil {
-					totalVolume += size
-				}
-			}
-		}
-	}
-
-	return totalVolume
+	
+	// For regular order book updates, return 0 volume
+	// We only track price changes, not order book depth as volume
+	// Actual volume should come from trade events
+	return 0
 }
 
 // parseFloat is a helper to parse string to float64.

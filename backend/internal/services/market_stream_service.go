@@ -162,23 +162,48 @@ func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID
  * - This function connects to Polymarket's real WebSocket feed.
  * - It runs in an infinite loop and should be started as a goroutine.
  * - It gracefully handles shutdown via the context.
- * - If WebSocket client is not configured, it falls back to a mock stream.
+ * - If WebSocket connection fails, existing OHLCV data persists and connection is retried.
+ * - No mock data is generated - only real market data is used.
  */
 func (s *MarketStreamService) RunStream() {
 	if s.wsClient == nil {
-		s.logger.Warn("CLOB WebSocket client not configured, falling back to mock stream")
-		s.RunMockStream()
+		s.logger.Error("CLOB WebSocket client not configured - cannot stream market data")
+		s.logger.Info("existing OHLCV data will persist, but no new updates will be received until WebSocket is configured")
 		return
 	}
 
 	s.logger.Info("starting Polymarket CLOB WebSocket stream service...")
 
-	// Connect to WebSocket
-	if err := s.wsClient.Connect(); err != nil {
-		s.logger.Error("failed to connect to CLOB WebSocket", "error", err)
-		// Fall back to mock stream on connection failure
-		s.RunMockStream()
-		return
+	// Retry connection with exponential backoff
+	maxRetries := 5
+	retryDelay := 5 * time.Second
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Connect to WebSocket
+		if err := s.wsClient.Connect(); err != nil {
+			s.logger.Error("failed to connect to CLOB WebSocket", 
+				"error", err, 
+				"attempt", attempt, 
+				"max_retries", maxRetries)
+			
+			if attempt < maxRetries {
+				s.logger.Info("retrying connection", 
+					"attempt", attempt+1, 
+					"delay", retryDelay)
+				time.Sleep(retryDelay)
+				retryDelay *= 2 // Exponential backoff
+				continue
+			} else {
+				s.logger.Error("failed to connect after all retries - existing data will persist, but no new updates will be received")
+				s.logger.Info("will retry connection in background")
+				// Start a background goroutine to retry connection periodically
+				go s.retryConnection()
+				return
+			}
+		}
+		
+		// Connection successful, break out of retry loop
+		break
 	}
 	defer s.wsClient.Close()
 
@@ -411,38 +436,38 @@ func (s *MarketStreamService) RunStream() {
 		// CRITICAL FIX: Only aggregate OHLCV for YES tokens to prevent price mixing
 		shouldAggregateOHLCV := tokenType == "yes"
 
-		// Extract mid-price and volume from order book
-		midPrice := ExtractMidPrice(bids, asks)
-		volume := ExtractVolume(bids, asks) // Extract volume from order book sizes
+		// Extract mid-price, spread, and volume from order book
+		// According to Polymarket: use mid-price unless spread > $0.10, then use last traded price
+		midPrice, spread := ExtractMidPrice(bids, asks)
+		volume := ExtractVolume(bids, asks) // Extract volume (0 for order book updates, actual size for trades)
 
 		// Validate price: Polymarket prices should be between 0.001 and 0.999 (probabilities)
 		// Reject extreme prices that might be from incorrect token parsing
+		// Note: If spread > 0.10, we should ideally use last traded price, but for now we'll use mid-price
+		// as we're tracking order book updates. Last traded price would come from trade events.
 		if midPrice > 0 && midPrice >= 0.001 && midPrice <= 0.999 {
-				// Parse timestamp (Polymarket CLOB WebSocket sends timestamps in seconds since epoch)
-				timestampSec, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
+				// Parse timestamp (Polymarket CLOB WebSocket sends timestamps in MILLISECONDS since epoch)
+				timestampMs, err := strconv.ParseInt(bookMsg.Timestamp, 10, 64)
 				if err == nil {
+					// Convert milliseconds to time.Time
+					// time.UnixMilli() is available in Go 1.17+, but we'll use the compatible approach
+					timestamp := time.Unix(timestampMs/1000, (timestampMs%1000)*1000000).UTC()
+					
+					// Validate timestamp: only replace timestamps that are clearly in the future
+					// Polymarket timestamps should be current, but allow some tolerance for network delays
+					now := time.Now().UTC()
+					timeDiff := now.Sub(timestamp)
+					
 					// Log timestamp details for debugging (first few messages only)
 					if messageCount <= 5 {
-						// Show the interpretation as seconds (correct format)
-						timestampAsSec := time.Unix(timestampSec, 0).UTC()
-						now := time.Now().UTC()
-
 						s.logger.Info("🔍 timestamp debugging",
 							"raw_timestamp_string", bookMsg.Timestamp,
-							"parsed_as_seconds", timestampSec,
-							"interpreted_as_seconds", timestampAsSec.Format(time.RFC3339),
+							"parsed_as_milliseconds", timestampMs,
+							"interpreted_timestamp", timestamp.Format(time.RFC3339),
 							"current_time_utc", now.Format(time.RFC3339),
-							"time_diff", now.Sub(timestampAsSec),
+							"time_diff", timeDiff,
 							"message_count", messageCount)
 					}
-
-					// Polymarket timestamps are in seconds since epoch
-					timestamp := time.Unix(timestampSec, 0).UTC()
-				
-				// Validate timestamp: only replace timestamps that are clearly in the future
-				// Polymarket timestamps should be current, but allow some tolerance for network delays
-				now := time.Now().UTC()
-				timeDiff := now.Sub(timestamp)
 
 				// Only replace timestamps that are more than 1 minute in the future
 				if timeDiff < -1*time.Minute {
@@ -459,13 +484,24 @@ func (s *MarketStreamService) RunStream() {
 				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
 				// YES token represents the market's implied probability
 				if shouldAggregateOHLCV {
+					// Log wide spreads (Polymarket uses last traded price when spread > 0.10)
+					if spread > 0.10 && (messageCount <= 10 || messageCount%1000 == 0) {
+						s.logger.Warn("⚠️  wide spread detected, consider using last traded price",
+							"condition_id", conditionID,
+							"spread", spread,
+							"mid_price", midPrice,
+							"message_count", messageCount)
+					}
+					
 					// Log first few OHLCV updates to confirm aggregation is working
 					if messageCount <= 10 || messageCount%100 == 0 {
 						s.logger.Info("📊 aggregating OHLCV for YES token", 
 							"condition_id", conditionID, 
 							"asset_id", bookMsg.AssetID, 
-							"price", midPrice, 
+							"price", midPrice,
+							"spread", spread,
 							"volume", volume,
+							"is_trade", volume > 0,
 							"token_type", tokenType,
 							"message_count", messageCount)
 					}
@@ -547,9 +583,30 @@ func (s *MarketStreamService) RunStream() {
 	// Start listening (this blocks until connection closes)
 	if err := s.wsClient.Listen(handler); err != nil {
 		s.logger.Error("WebSocket listen error", "error", err)
+		s.logger.Info("existing OHLCV data will persist, attempting to reconnect...")
 		// Attempt to reconnect after a delay
 		time.Sleep(5 * time.Second)
 		s.RunStream() // Recursive call to reconnect
+	}
+}
+
+// retryConnection periodically attempts to reconnect to the WebSocket
+// This runs in the background when initial connection fails
+func (s *MarketStreamService) retryConnection() {
+	ticker := time.NewTicker(30 * time.Second) // Retry every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.logger.Info("stopping connection retry")
+			return
+		case <-ticker.C:
+			s.logger.Info("attempting to reconnect to WebSocket...")
+			s.RunStream() // This will handle its own retries
+			// If RunStream returns, connection was successful or we should stop
+			return
+		}
 	}
 }
 
@@ -560,63 +617,16 @@ func (s *MarketStreamService) RunStream() {
  * and publishes it to the corresponding Redis channels.
  *
  * @notes
- * - This function is used as a fallback when WebSocket is not configured or fails.
+ * - DEPRECATED: This function is no longer used. We persist existing data instead of using mock data.
+ * - Kept for reference but should not be called.
  * - It runs in an infinite loop and should be started as a goroutine.
  * - It gracefully handles shutdown via the context.
  */
 func (s *MarketStreamService) RunMockStream() {
-	s.logger.Info("starting mock market data stream service...")
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	mockMarkets := []struct {
-		Market  string
-		AssetID string
-	}{
-		{
-			Market:  "0x1b6f76e5b8587ee896c35847e12d11e75290a8c3934c5952e8a9d6e4c6f03cfa",
-			AssetID: "114304586861386186441621124384163963092522056897081085884483958561365015034812",
-		},
-		{
-			Market:  "0xbd31dc8a20211944f6b70f31557f1001557b59905b7738480ca09bd4532f84af",
-			AssetID: "52114319501245915516055106046884209969926127482827954674443846427813813222426",
-		},
-	}
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.logger.Info("stopping mock market data stream service.")
-			return
-		case <-ticker.C:
-			for _, market := range mockMarkets {
-				data := s.generateMockOrderBook(market.Market, market.AssetID)
-				
-				// Extract mid-price and volume, then aggregate OHLCV
-				bids := data["bids"].([]interface{})
-				asks := data["asks"].([]interface{})
-				midPrice := ExtractMidPrice(bids, asks)
-				volume := ExtractVolume(bids, asks)
-				if midPrice > 0 {
-					timestamp := time.Now()
-					if err := s.ohlcvAggregator.UpdatePrice(market.Market, midPrice, volume, timestamp); err != nil {
-						s.logger.Error("failed to update OHLCV", "error", err, "market", market.Market)
-					}
-				}
-
-				payload, err := json.Marshal(data)
-				if err != nil {
-					s.logger.Error("failed to marshal mock order book data", "error", err, "market", market.Market)
-					continue
-				}
-
-				channel := "market:" + market.Market
-				if err := s.redisClient.Publish(s.ctx, channel, payload).Err(); err != nil {
-					s.logger.Error("failed to publish data to redis", "error", err, "channel", channel)
-				}
-			}
-		}
-	}
+	s.logger.Warn("RunMockStream called but mock streams are disabled - existing data will persist")
+	// Mock streams are disabled - we persist existing OHLCV data instead of generating fake data
+	// This ensures data integrity and prevents contamination of real market data
+	return
 }
 
 // generateMockOrderBook creates a randomized order book for a given market and asset ID.
