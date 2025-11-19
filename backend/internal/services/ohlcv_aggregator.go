@@ -105,12 +105,13 @@ func (a *OHLCVAggregator) UpdatePrice(marketID string, price float64, volume flo
 	a.totalUpdates++
 
 	// Log first few updates to confirm function is being called
-	if a.totalUpdates <= 3 {
+	if a.totalUpdates <= 10 || a.totalUpdates%100 == 0 {
 		a.logger.Info("OHLCV aggregator: processing price update",
 			"update", a.totalUpdates,
 			"market_id", marketID,
 			"price", price,
-			"volume", volume)
+			"volume", volume,
+			"timestamp", timestamp.Format(time.RFC3339))
 	}
 
 	// Periodic cleanup: run cleanup every 24 hours to prevent old data accumulation
@@ -484,6 +485,11 @@ func (a *OHLCVAggregator) periodicStatusLog() {
 func (a *OHLCVAggregator) logStatus() {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+
+	a.logger.Info("📊 OHLCV aggregator status check",
+		"total_updates", a.totalUpdates,
+		"total_bars_saved", a.totalBarsSaved,
+		"active_markets", len(a.bars))
 
 	if len(a.bars) == 0 {
 		a.logger.Warn("⚠️  OHLCV aggregator: no bars in memory",

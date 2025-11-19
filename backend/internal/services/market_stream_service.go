@@ -106,10 +106,15 @@ func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID
 
 	// Parse clobTokenIds - format is ["NO_TOKEN_ID", "YES_TOKEN_ID"]
 	if market.ClobTokenIds != "" {
+		s.logger.Debug("parsing ClobTokenIds", "condition_id", conditionID, "token_id", tokenID, "clob_token_ids", market.ClobTokenIds)
 		var tokenIds []string
-		if err := json.Unmarshal([]byte(market.ClobTokenIds), &tokenIds); err == nil && len(tokenIds) >= 2 {
+		if err := json.Unmarshal([]byte(market.ClobTokenIds), &tokenIds); err != nil {
+			s.logger.Warn("failed to parse ClobTokenIds JSON", "condition_id", conditionID, "clob_token_ids", market.ClobTokenIds, "error", err)
+		} else if len(tokenIds) >= 2 {
 			noTokenID := tokenIds[0]
 			yesTokenID := tokenIds[1]
+
+			s.logger.Debug("successfully parsed token IDs", "condition_id", conditionID, "no_token", noTokenID, "yes_token", yesTokenID, "requested_token", tokenID)
 
 			// Initialize token map for this condition
 			if s.tokenMap[conditionID] == nil {
@@ -122,13 +127,22 @@ func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID
 
 			// Return the type for the requested token
 			if tokenID == noTokenID {
+				s.logger.Debug("identified token as NO", "token_id", tokenID, "condition_id", conditionID)
 				return "no"
 			} else if tokenID == yesTokenID {
+				s.logger.Debug("identified token as YES", "token_id", tokenID, "condition_id", conditionID)
 				return "yes"
+			} else {
+				s.logger.Warn("token not found in parsed IDs", "token_id", tokenID, "condition_id", conditionID, "parsed_tokens", tokenIds)
 			}
+		} else {
+			s.logger.Warn("ClobTokenIds has insufficient tokens", "condition_id", conditionID, "token_count", len(tokenIds), "clob_token_ids", market.ClobTokenIds)
 		}
+	} else {
+		s.logger.Warn("ClobTokenIds is empty", "condition_id", conditionID, "token_id", tokenID)
 	}
 
+	s.logger.Debug("token identification failed, returning unknown", "condition_id", conditionID, "token_id", tokenID)
 	return "unknown"
 }
 
@@ -386,12 +400,12 @@ func (s *MarketStreamService) RunStream() {
 				now := time.Now().UTC()
 				timeDiff := now.Sub(timestamp)
 				
-				// More aggressive validation: if timestamp is more than 5 minutes old or in the future, use current time
-				// This ensures we always use recent timestamps for OHLCV aggregation
-				if timeDiff > 5*time.Minute || timeDiff < -1*time.Minute {
-					// Always log when we replace a timestamp (not just first 5)
+				// Less aggressive validation: only replace timestamps that are clearly invalid
+				// Only replace timestamps that are in the future (more than 1 minute) - keep historical timestamps for proper OHLCV timing
+				if timeDiff < -1*time.Minute {
+					// Only replace timestamps that are clearly in the future
 					if messageCount <= 10 || messageCount%1000 == 0 {
-						s.logger.Warn("⚠️  WebSocket timestamp replaced with current time",
+						s.logger.Warn("⚠️  WebSocket timestamp is in future, replaced with current time",
 							"websocket_timestamp", timestamp.Format(time.RFC3339),
 							"websocket_timestamp_date", timestamp.Format("2006-01-02"),
 							"time_diff", timeDiff,
@@ -405,11 +419,12 @@ func (s *MarketStreamService) RunStream() {
 				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
 				// YES token represents the market's implied probability
 				if shouldAggregateOHLCV {
+					s.logger.Debug("aggregating OHLCV for YES token", "condition_id", conditionID, "asset_id", bookMsg.AssetID, "price", midPrice, "volume", volume)
 					if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
 						s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID, "token_type", tokenType)
 					}
 				} else {
-					s.logger.Debug("skipping OHLCV aggregation for non-YES token", "asset_id", bookMsg.AssetID, "token_type", tokenType)
+					s.logger.Debug("skipping OHLCV aggregation for non-YES token", "asset_id", bookMsg.AssetID, "token_type", tokenType, "condition_id", conditionID)
 				}
 			} else {
 				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
