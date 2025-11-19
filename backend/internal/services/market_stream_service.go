@@ -343,6 +343,12 @@ func (s *MarketStreamService) RunStream() {
 				"using_as_condition_id", conditionID)
 		}
 
+		// Identify token type BEFORE any processing
+		tokenType := s.identifyTokenType(s.ctx, conditionID, bookMsg.AssetID)
+
+		// CRITICAL FIX: Only aggregate OHLCV for YES tokens to prevent price mixing
+		shouldAggregateOHLCV := tokenType == "yes"
+
 		// Extract mid-price and volume from order book
 		midPrice := ExtractMidPrice(bids, asks)
 		volume := ExtractVolume(bids, asks) // Extract volume from order book sizes
@@ -396,9 +402,14 @@ func (s *MarketStreamService) RunStream() {
 					timestamp = now
 				}
 				
-				// Use conditionID for OHLCV aggregation to ensure bars are stored under the correct market ID
-				if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
-					s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID)
+				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
+				// YES token represents the market's implied probability
+				if shouldAggregateOHLCV {
+					if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
+						s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID, "token_type", tokenType)
+					}
+				} else {
+					s.logger.Debug("skipping OHLCV aggregation for non-YES token", "asset_id", bookMsg.AssetID, "token_type", tokenType)
 				}
 			} else {
 				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
@@ -422,9 +433,6 @@ func (s *MarketStreamService) RunStream() {
 				"size":  ask.Size,
 			}
 		}
-
-		// Identify token type (YES or NO)
-		tokenType := s.identifyTokenType(s.ctx, conditionID, bookMsg.AssetID)
 
 		// Convert to our format with token separation
 		data := map[string]interface{}{
