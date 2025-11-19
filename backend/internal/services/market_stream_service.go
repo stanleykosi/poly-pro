@@ -90,31 +90,41 @@ func NewMarketStreamService(ctx context.Context, logger *slog.Logger, redisClien
 
 // identifyTokenType determines if a token is YES or NO based on market data
 func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID, tokenID string) string {
-	// Check if we already have this mapping cached
+	// Check if we already have this mapping cached (this should be the common case after initialization)
 	if tokenTypes, exists := s.tokenMap[conditionID]; exists {
 		if tokenType, found := tokenTypes[tokenID]; found {
 			return tokenType
 		}
+		// Token not in cache but condition exists - log for debugging
+		s.logger.Debug("token not in cache for condition", "condition_id", conditionID, "token_id", tokenID, "cached_tokens", len(tokenTypes))
 	}
 
-	// Fetch market data to identify token types
+	// Fallback: Fetch market data to identify token types (should rarely happen if initialization worked)
+	// This is a fallback for markets that weren't in the initial fetch or for new markets
 	market, err := s.gammaClient.GetMarketByConditionID(ctx, conditionID)
 	if err != nil {
-		s.logger.Warn("failed to fetch market data for token identification", "condition_id", conditionID, "error", err)
+		s.logger.Warn("failed to fetch market data for token identification", "condition_id", conditionID, "token_id", tokenID, "error", err)
 		return "unknown"
 	}
 
 	// Parse clobTokenIds - format is ["NO_TOKEN_ID", "YES_TOKEN_ID"]
 	if market.ClobTokenIds != "" {
-		s.logger.Debug("parsing ClobTokenIds", "condition_id", conditionID, "token_id", tokenID, "clob_token_ids", market.ClobTokenIds)
 		var tokenIds []string
+		// Try parsing as JSON array first
 		if err := json.Unmarshal([]byte(market.ClobTokenIds), &tokenIds); err != nil {
-			s.logger.Warn("failed to parse ClobTokenIds JSON", "condition_id", conditionID, "clob_token_ids", market.ClobTokenIds, "error", err)
-		} else if len(tokenIds) >= 2 {
+			// Try parsing as comma-separated string
+			parts := strings.Split(market.ClobTokenIds, ",")
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					tokenIds = append(tokenIds, trimmed)
+				}
+			}
+		}
+		
+		if len(tokenIds) >= 2 {
 			noTokenID := tokenIds[0]
 			yesTokenID := tokenIds[1]
-
-			s.logger.Debug("successfully parsed token IDs", "condition_id", conditionID, "no_token", noTokenID, "yes_token", yesTokenID, "requested_token", tokenID)
 
 			// Initialize token map for this condition
 			if s.tokenMap[conditionID] == nil {
@@ -127,10 +137,8 @@ func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID
 
 			// Return the type for the requested token
 			if tokenID == noTokenID {
-				s.logger.Debug("identified token as NO", "token_id", tokenID, "condition_id", conditionID)
 				return "no"
 			} else if tokenID == yesTokenID {
-				s.logger.Debug("identified token as YES", "token_id", tokenID, "condition_id", conditionID)
 				return "yes"
 			} else {
 				s.logger.Warn("token not found in parsed IDs", "token_id", tokenID, "condition_id", conditionID, "parsed_tokens", tokenIds)
@@ -142,7 +150,6 @@ func (s *MarketStreamService) identifyTokenType(ctx context.Context, conditionID
 		s.logger.Warn("ClobTokenIds is empty", "condition_id", conditionID, "token_id", tokenID)
 	}
 
-	s.logger.Debug("token identification failed, returning unknown", "condition_id", conditionID, "token_id", tokenID)
 	return "unknown"
 }
 
@@ -251,21 +258,62 @@ func (s *MarketStreamService) RunStream() {
 				}
 			} else {
 				marketsWithTokens++
-				// Create mapping from token ID to condition ID
-				// This allows us to publish to Redis channels using condition ID when messages arrive
-				for _, tokenID := range tokenIDs {
+				// Initialize token map for this condition if not already done
+				if s.tokenMap[market.ConditionID] == nil {
+					s.tokenMap[market.ConditionID] = make(map[string]string)
+				}
+				
+				// Parse token types: ClobTokenIds format is ["NO_TOKEN_ID", "YES_TOKEN_ID"]
+				// So index 0 is NO, index 1 is YES
+				for idx, tokenID := range tokenIDs {
 					assetIDToConditionID[tokenID] = market.ConditionID
+					
+					// Determine token type based on position in array
+					// Polymarket convention: [NO, YES] or sometimes just 2 tokens where first is NO, second is YES
+					if len(tokenIDs) >= 2 {
+						if idx == 0 {
+							s.tokenMap[market.ConditionID][tokenID] = "no"
+						} else if idx == 1 {
+							s.tokenMap[market.ConditionID][tokenID] = "yes"
+						} else {
+							// For additional tokens, default to unknown
+							s.tokenMap[market.ConditionID][tokenID] = "unknown"
+						}
+					} else {
+						// If we only have one token, we can't determine type
+						s.tokenMap[market.ConditionID][tokenID] = "unknown"
+					}
 				}
 				// Add all token IDs found for this market
 				assetIDs = append(assetIDs, tokenIDs...)
 			}
 		}
+	// Count YES and NO tokens for logging
+	yesTokenCount := 0
+	noTokenCount := 0
+	unknownTokenCount := 0
+	for _, tokenTypes := range s.tokenMap {
+		for _, tokenType := range tokenTypes {
+			switch tokenType {
+			case "yes":
+				yesTokenCount++
+			case "no":
+				noTokenCount++
+			default:
+				unknownTokenCount++
+			}
+		}
+	}
+	
 	s.logger.Info("✅ extracted token IDs from Gamma API markets", 
 		"market_count", len(markets),
 		"markets_with_tokens", marketsWithTokens,
 		"markets_without_tokens", marketsWithoutTokens,
 		"total_token_ids", len(assetIDs),
-		"mapping_size", len(assetIDToConditionID))
+		"mapping_size", len(assetIDToConditionID),
+		"yes_tokens", yesTokenCount,
+		"no_tokens", noTokenCount,
+		"unknown_tokens", unknownTokenCount)
 	} else {
 		s.logger.Error("Gamma client not available - cannot fetch markets")
 		return
@@ -411,18 +459,36 @@ func (s *MarketStreamService) RunStream() {
 				// CRITICAL: Only aggregate OHLCV for YES tokens to prevent price mixing
 				// YES token represents the market's implied probability
 				if shouldAggregateOHLCV {
-					s.logger.Debug("aggregating OHLCV for YES token", "condition_id", conditionID, "asset_id", bookMsg.AssetID, "price", midPrice, "volume", volume)
+					// Log first few OHLCV updates to confirm aggregation is working
+					if messageCount <= 10 || messageCount%100 == 0 {
+						s.logger.Info("📊 aggregating OHLCV for YES token", 
+							"condition_id", conditionID, 
+							"asset_id", bookMsg.AssetID, 
+							"price", midPrice, 
+							"volume", volume,
+							"token_type", tokenType,
+							"message_count", messageCount)
+					}
 					if err := s.ohlcvAggregator.UpdatePrice(conditionID, midPrice, volume, timestamp); err != nil {
 						s.logger.Error("failed to update OHLCV", "error", err, "condition_id", conditionID, "asset_id", bookMsg.AssetID, "token_type", tokenType)
 					}
 				} else {
-					s.logger.Debug("skipping OHLCV aggregation for non-YES token", "asset_id", bookMsg.AssetID, "token_type", tokenType, "condition_id", conditionID)
+					// Only log first few skips to avoid spam
+					if messageCount <= 10 {
+						s.logger.Info("⏭️  skipping OHLCV aggregation for non-YES token", 
+							"asset_id", bookMsg.AssetID, 
+							"token_type", tokenType, 
+							"condition_id", conditionID,
+							"message_count", messageCount)
+					}
 				}
 			} else {
 				s.logger.Warn("failed to parse timestamp", "timestamp", bookMsg.Timestamp, "error", err)
 			}
 		} else {
-			s.logger.Debug("mid-price out of valid range (%.6f), skipping OHLCV update", midPrice)
+			if messageCount <= 10 {
+				s.logger.Debug("mid-price out of valid range, skipping OHLCV update", "price", midPrice, "message_count", messageCount)
+			}
 		}
 
 		// Convert valid bids/asks to the format expected by frontend
