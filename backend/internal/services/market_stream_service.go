@@ -623,7 +623,8 @@ func (s *MarketStreamService) RunStream() {
 					}
 					
 					// Log first few OHLCV updates to confirm aggregation is working
-					if messageCount <= 10 || messageCount%100 == 0 {
+					// Also log when volume > 0 to verify trade events are being recorded
+					if messageCount <= 10 || messageCount%100 == 0 || volume > 0 {
 						s.logger.Info("📊 aggregating OHLCV for YES token", 
 							"condition_id", conditionID, 
 							"asset_id", bookMsg.AssetID, 
@@ -633,6 +634,7 @@ func (s *MarketStreamService) RunStream() {
 							"spread", spread,
 							"volume", volume,
 							"is_trade", volume > 0,
+							"is_trade_event", isTradeEvent,
 							"token_type", tokenType,
 							"message_count", messageCount)
 					}
