@@ -453,8 +453,9 @@ func (s *MarketStreamService) RunStream() {
 		if isTradeEvent && shouldAggregateOHLCV {
 			if tradePrice, err := strconv.ParseFloat(validBids[0].Price, 64); err == nil {
 				s.lastTradedPrices[bookMsg.AssetID] = tradePrice
-				if messageCount <= 20 || messageCount%1000 == 0 {
-					s.logger.Info("💰 tracked last traded price from trade event",
+				// Only log first few or occasionally to reduce noise
+				if messageCount <= 10 || messageCount%5000 == 0 {
+					s.logger.Debug("💰 tracked last traded price from trade event",
 						"condition_id", conditionID,
 						"asset_id", bookMsg.AssetID,
 						"last_traded_price", tradePrice,
@@ -469,7 +470,8 @@ func (s *MarketStreamService) RunStream() {
 		
 		// CRITICAL DEBUGGING: Log raw prices for YES tokens, especially when price is suspicious (0.5 or near 0.5)
 		// This helps identify if we're processing wrong tokens or getting invalid prices
-		if shouldAggregateOHLCV && (messageCount <= 20 || (midPrice >= 0.49 && midPrice <= 0.51) || !hasBothSides) {
+		// Reduced verbosity: only log first 10 messages or when there's an actual issue
+		if shouldAggregateOHLCV && (messageCount <= 10 || (midPrice >= 0.49 && midPrice <= 0.51 && spread > 0.10)) {
 			var bestBidStr, bestAskStr string
 			if len(validBids) > 0 {
 				bestBidStr = validBids[0].Price
@@ -558,10 +560,12 @@ func (s *MarketStreamService) RunStream() {
 					
 					if spread > 0.10 {
 						// Wide spread detected - use last traded price if available
+						// Use the most recent last traded price we've seen (even if from a previous message)
 						if lastTradedPrice, hasLastTrade := s.lastTradedPrices[bookMsg.AssetID]; hasLastTrade && lastTradedPrice > 0 {
 							finalPrice = lastTradedPrice
 							priceSource = "last_traded"
-							if messageCount <= 20 || messageCount%1000 == 0 {
+							// Only log occasionally to reduce noise
+							if messageCount <= 10 || messageCount%5000 == 0 {
 								s.logger.Info("✅ using last traded price due to wide spread (Polymarket rule)",
 									"condition_id", conditionID,
 									"asset_id", bookMsg.AssetID,
@@ -571,15 +575,17 @@ func (s *MarketStreamService) RunStream() {
 									"message_count", messageCount)
 							}
 						} else {
-							// Wide spread but no last traded price available - log warning and skip this update
-							// We can't use mid-price when spread is too wide (would give incorrect 0.5 prices)
-							if messageCount <= 20 || messageCount%1000 == 0 {
-								s.logger.Warn("⚠️  wide spread detected but no last traded price available - skipping update",
+							// Wide spread but no last traded price available yet
+							// This is normal at startup - we'll get last traded prices from trade events soon
+							// Only log occasionally to reduce noise
+							if messageCount <= 10 || messageCount%5000 == 0 {
+								s.logger.Debug("⏳ wide spread detected, waiting for last traded price",
 									"condition_id", conditionID,
 									"asset_id", bookMsg.AssetID,
 									"spread", spread,
 									"mid_price", midPrice,
-									"message_count", messageCount)
+									"message_count", messageCount,
+									"note", "This is normal at startup - last traded prices will be available after trade events")
 							}
 							// Skip this update - don't use unreliable mid-price when spread is too wide
 							return nil
