@@ -126,10 +126,16 @@ export default function PlaceOrderForm({
     setPricesFetchError(null)
 
     try {
+      console.log('[PlaceOrderForm] 🔵 API CALL: Fetching official market prices', {
+        marketId,
+        yesTokenId,
+        noTokenId,
+        timestamp: new Date().toISOString()
+      })
       const prices = await marketService.getOfficialMarketPrices(marketId)
       setOfficialPrices(prices)
       lastMarketIdRef.current = marketId
-      console.log('[PlaceOrderForm] Official prices loaded from Gamma API:', {
+      console.log('[PlaceOrderForm] ✅ API RESPONSE: Official prices loaded from Gamma API:', {
         prices,
         pricesCount: prices.length,
         marketId,
@@ -159,6 +165,13 @@ export default function PlaceOrderForm({
   // Fetch official prices when component mounts or market changes
   // Only fetch once per marketId, and don't retry on error
   useEffect(() => {
+    console.log('[PlaceOrderForm] 🔄 Market changed, fetching prices', {
+      marketId,
+      previousMarketId: lastMarketIdRef.current,
+      yesTokenId,
+      noTokenId
+    })
+
     // Reset state when marketId changes
     if (lastMarketIdRef.current !== marketId) {
       setPricesFetchError(null)
@@ -391,72 +404,54 @@ export default function PlaceOrderForm({
     return 'secondary' // Orange for sell
   }, [side])
 
-  // Get official market price for the current side (direct from Gamma API)
-  const currentOfficialPrice = useMemo(() => {
-    let targetTokenId = null
+  // Get YES and NO prices separately (always show both)
+  const yesPrice = useMemo(() => {
+    if (officialPrices.length === 0) return null
 
-    if (side === 'BUY_YES' && yesTokenId) {
-      targetTokenId = yesTokenId
-    } else if (side === 'BUY_NO' && noTokenId) {
-      targetTokenId = noTokenId
-    } else if (side === 'SELL') {
-      // For selling, use YES token as default (can be enhanced with position logic)
-      targetTokenId = yesTokenId
+    // Try to find YES price by token ID match
+    if (yesTokenId) {
+      let price = officialPrices.find(p => p.token_id === yesTokenId)
+      if (!price) {
+        price = officialPrices.find(p => p.token_id.toLowerCase() === yesTokenId.toLowerCase())
+      }
+      if (price) return price.market_price
     }
 
-    if (targetTokenId && officialPrices.length > 0) {
-      // Debug: Log available prices and target token ID
-      console.log('[PlaceOrderForm] Looking for official price:', {
-        targetTokenId,
-        side,
-        availablePrices: officialPrices.map(p => ({ token_id: p.token_id, market_price: p.market_price })),
-        yesTokenId,
-        noTokenId
-      })
-
-      // Try exact match first
-      let officialPrice = officialPrices.find(p => p.token_id === targetTokenId)
-
-      // If no exact match, try case-insensitive match
-      if (!officialPrice) {
-        officialPrice = officialPrices.find(p =>
-          p.token_id.toLowerCase() === targetTokenId.toLowerCase()
-        )
-      }
-
-      // If still no match and we have exactly 2 prices, use index-based matching
-      // Polymarket convention: [NO, YES] - index 0 is NO, index 1 is YES
-      if (!officialPrice && officialPrices.length === 2) {
-        if (side === 'BUY_YES' || (side === 'SELL' && yesTokenId)) {
-          officialPrice = officialPrices[1] // YES is typically second
-          console.log('[PlaceOrderForm] Using index-based matching for YES token (index 1)')
-        } else if (side === 'BUY_NO') {
-          officialPrice = officialPrices[0] // NO is typically first
-          console.log('[PlaceOrderForm] Using index-based matching for NO token (index 0)')
-        }
-      }
-
-      if (officialPrice) {
-        console.log('[PlaceOrderForm] Found official price:', officialPrice.market_price)
-        return officialPrice.market_price // Direct from Polymarket's Gamma API
-      } else {
-        console.warn('[PlaceOrderForm] No matching official price found for token:', targetTokenId, {
-          availableTokenIds: officialPrices.map(p => p.token_id),
-          targetTokenId,
-          side
-        })
-      }
-    } else if (targetTokenId && officialPrices.length === 0) {
-      console.warn('[PlaceOrderForm] No official prices available yet, targetTokenId:', targetTokenId, {
-        officialPricesLoading,
-        pricesFetchError
-      })
-    } else if (!targetTokenId) {
-      console.warn('[PlaceOrderForm] No target token ID for side:', side, { yesTokenId, noTokenId })
+    // Fallback: If we have exactly 2 prices, YES is typically index 1
+    if (officialPrices.length === 2) {
+      return officialPrices[1].market_price
     }
 
     return null
-  }, [side, officialPrices, yesTokenId, noTokenId])
+  }, [officialPrices, yesTokenId])
+
+  const noPrice = useMemo(() => {
+    if (officialPrices.length === 0) return null
+
+    // Try to find NO price by token ID match
+    if (noTokenId) {
+      let price = officialPrices.find(p => p.token_id === noTokenId)
+      if (!price) {
+        price = officialPrices.find(p => p.token_id.toLowerCase() === noTokenId.toLowerCase())
+      }
+      if (price) return price.market_price
+    }
+
+    // Fallback: If we have exactly 2 prices, NO is typically index 0
+    if (officialPrices.length === 2) {
+      return officialPrices[0].market_price
+    }
+
+    return null
+  }, [officialPrices, noTokenId])
+
+  // Get official market price for the current side (for calculations)
+  const currentOfficialPrice = useMemo(() => {
+    if (side === 'BUY_YES') return yesPrice
+    if (side === 'BUY_NO') return noPrice
+    if (side === 'SELL') return yesPrice // Default to YES for sell
+    return null
+  }, [side, yesPrice, noPrice])
 
   // Market price display - uses official Polymarket prices from Gamma API
   const marketPriceDisplay = useMemo(() => {
@@ -655,25 +650,40 @@ export default function PlaceOrderForm({
                 {priceDisplay || '$'}
               </span>
             </div>
-            {orderType === 'MARKET' && (
-              <p className="text-xs text-muted-foreground flex items-center gap-2">
-                {officialPricesLoading ? (
-                  <>
-                    <div className="w-3 h-3 border border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin"></div>
-                    Loading official market price...
-                  </>
-                ) : marketPriceDisplay ? (
-                  <>
-                    Official Market Price: {marketPriceDisplay.price}
-                    <span className="text-xs opacity-70">
-                      (Polymarket Gamma API)
-                    </span>
-                  </>
-                ) : (
-                  'Official market price unavailable'
-                )}
-              </p>
-            )}
+            {/* Display both YES and NO prices with colors - Always visible */}
+            <div className="space-y-1 pt-1">
+              {officialPricesLoading ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  <div className="w-3 h-3 border border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin"></div>
+                  Loading official market prices...
+                </p>
+              ) : (
+                <>
+                  {yesPrice !== null && (
+                    <p className="text-xs flex items-center gap-2">
+                      <span className="font-medium text-green-500">YES:</span>
+                      <span className="text-green-400 font-semibold">${yesPrice.toFixed(4)}</span>
+                      <span className="text-xs opacity-70 text-muted-foreground">(Gamma API)</span>
+                    </p>
+                  )}
+                  {noPrice !== null && (
+                    <p className="text-xs flex items-center gap-2">
+                      <span className="font-medium text-red-500">NO:</span>
+                      <span className="text-red-400 font-semibold">${noPrice.toFixed(4)}</span>
+                      <span className="text-xs opacity-70 text-muted-foreground">(Gamma API)</span>
+                    </p>
+                  )}
+                  {yesPrice === null && noPrice === null && !officialPricesLoading && (
+                    <p className="text-xs text-muted-foreground">
+                      Official market prices unavailable
+                      {pricesFetchError && (
+                        <span className="text-red-500 ml-2">({pricesFetchError})</span>
+                      )}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
           {/* Size Input */}
