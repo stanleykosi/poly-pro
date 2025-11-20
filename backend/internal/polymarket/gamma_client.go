@@ -93,8 +93,10 @@ type GammaError struct {
 }
 
 // GetMarketByConditionID fetches a market by its condition ID
+// Note: Gamma API's conditionId query parameter doesn't always work correctly,
+// so we fetch a larger list and filter by conditionId in the response
 func (c *GammaAPIClient) GetMarketByConditionID(ctx context.Context, conditionID string) (*GammaMarket, error) {
-	// Use the markets endpoint with conditionId query parameter
+	// First try the direct conditionId query
 	apiURL := fmt.Sprintf("%s/markets?conditionId=%s", c.baseURL, url.QueryEscape(conditionID))
 
 	c.logger.Info("fetching market from Gamma API", "condition_id", conditionID, "url", apiURL)
@@ -133,12 +135,30 @@ func (c *GammaAPIClient) GetMarketByConditionID(ctx context.Context, conditionID
 		return nil, fmt.Errorf("failed to parse market response: %w", err)
 	}
 
-	if len(markets) == 0 {
-		return nil, fmt.Errorf("market not found for condition ID: %s", conditionID)
+	// Filter by conditionId to find the exact match (conditionId query param may return wrong market)
+	for _, market := range markets {
+		if market.ConditionID == conditionID {
+			c.logger.Info("found market by conditionId match", "condition_id", conditionID, "question", market.Question)
+			return &market, nil
+		}
 	}
 
-	// Return the first market (should only be one for a specific condition ID)
-	return &markets[0], nil
+	// If no exact match found, try fetching from active markets list and filtering
+	c.logger.Info("conditionId query didn't return exact match, trying active markets list", "condition_id", conditionID)
+	activeMarkets, err := c.ListActiveMarkets(ctx, 500, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch active markets: %w", err)
+	}
+
+	// Search in active markets
+	for _, market := range activeMarkets {
+		if market.ConditionID == conditionID {
+			c.logger.Info("found market in active markets list", "condition_id", conditionID, "question", market.Question)
+			return &market, nil
+		}
+	}
+
+	return nil, fmt.Errorf("market not found for condition ID: %s", conditionID)
 }
 
 // GetMarketBySlug fetches a market by its slug
