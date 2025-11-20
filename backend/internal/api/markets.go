@@ -13,6 +13,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -244,46 +245,107 @@ func (server *Server) getOfficialMarketPrices(c *gin.Context) {
 		return
 	}
 
-	// Extract prices directly from the tokens array - Gamma API provides official average prices
-	prices := make([]polymarket.MarketPrice, 0, len(gammaMarket.Tokens))
+	// Extract prices from Gamma API
+	// Gamma API provides prices in outcomePrices field (JSON string array: ["NO_price", "YES_price"])
+	// And token IDs in clobTokenIds field (JSON string array: ["NO_token_id", "YES_token_id"])
+	prices := make([]polymarket.MarketPrice, 0, 2)
 
-	for _, token := range gammaMarket.Tokens {
-		// Skip tokens without token ID
-		if token.TokenID == "" {
-			server.logger.Debug("skipping token without token ID", "outcome", token.Outcome)
-			continue
+	// Parse clobTokenIds to get token IDs
+	var tokenIDs []string
+	if gammaMarket.ClobTokenIds != "" {
+		if err := json.Unmarshal([]byte(gammaMarket.ClobTokenIds), &tokenIDs); err != nil {
+			// Try comma-separated format as fallback
+			parts := strings.Split(gammaMarket.ClobTokenIds, ",")
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					tokenIDs = append(tokenIDs, trimmed)
+				}
+			}
+		}
+		server.logger.Info("parsed clobTokenIds", "token_ids", tokenIDs, "raw", gammaMarket.ClobTokenIds)
+	} else {
+		server.logger.Warn("clobTokenIds is empty", "market_id", marketID)
+	}
+
+	// Parse outcomePrices to get prices
+	var outcomePrices []string
+	if gammaMarket.OutcomePrices != "" {
+		if err := json.Unmarshal([]byte(gammaMarket.OutcomePrices), &outcomePrices); err != nil {
+			server.logger.Warn("failed to parse outcomePrices", "outcomePrices", gammaMarket.OutcomePrices, "error", err)
+		} else {
+			server.logger.Info("parsed outcomePrices", "prices", outcomePrices, "raw", gammaMarket.OutcomePrices)
+		}
+	} else {
+		server.logger.Warn("outcomePrices is empty", "market_id", marketID)
+	}
+
+	// If we have both token IDs and prices, create market price entries
+	// Polymarket convention: [NO, YES] - index 0 is NO, index 1 is YES
+	if len(tokenIDs) >= 2 && len(outcomePrices) >= 2 {
+		// NO token (index 0)
+		if noPrice, err := parseFloat(outcomePrices[0]); err == nil && noPrice >= 0 && noPrice <= 1 {
+			marketPrice := polymarket.MarketPrice{
+				TokenID:     tokenIDs[0],
+				BestBid:     noPrice,
+				BestAsk:     noPrice,
+				Spread:      0,
+				MarketPrice: noPrice,
+				PriceSource: "gamma_api",
+				LastUpdated: gammaMarket.UpdatedAt,
+			}
+			prices = append(prices, marketPrice)
+			server.logger.Debug("added NO token price", "token_id", tokenIDs[0], "price", noPrice)
+		} else if err != nil {
+			server.logger.Warn("failed to parse NO price", "price_string", outcomePrices[0], "error", err)
 		}
 
-		// Parse the official price from Gamma API
-		// If price is empty, skip this token (some tokens might not have prices yet)
-		if token.Price == "" {
-			server.logger.Debug("token has no price in Gamma API response", "token_id", token.TokenID, "outcome", token.Outcome)
-			continue
+		// YES token (index 1)
+		if yesPrice, err := parseFloat(outcomePrices[1]); err == nil && yesPrice >= 0 && yesPrice <= 1 {
+			marketPrice := polymarket.MarketPrice{
+				TokenID:     tokenIDs[1],
+				BestBid:     yesPrice,
+				BestAsk:     yesPrice,
+				Spread:      0,
+				MarketPrice: yesPrice,
+				PriceSource: "gamma_api",
+				LastUpdated: gammaMarket.UpdatedAt,
+			}
+			prices = append(prices, marketPrice)
+			server.logger.Debug("added YES token price", "token_id", tokenIDs[1], "price", yesPrice)
+		} else if err != nil {
+			server.logger.Warn("failed to parse YES price", "price_string", outcomePrices[1], "error", err)
 		}
+	} else {
+		server.logger.Warn("insufficient data to create prices", 
+			"token_ids_count", len(tokenIDs), 
+			"outcome_prices_count", len(outcomePrices),
+			"market_id", marketID)
+	}
 
-		price, err := parseFloat(token.Price)
-		if err != nil {
-			server.logger.Warn("failed to parse token price from Gamma API", "token_id", token.TokenID, "price", token.Price, "error", err)
-			continue
-		}
+	// Fallback: If outcomePrices didn't work, try using tokens array (if available)
+	if len(prices) == 0 && len(gammaMarket.Tokens) > 0 {
+		for _, token := range gammaMarket.Tokens {
+			if token.TokenID == "" || token.Price == "" {
+				continue
+			}
 
-		// Validate price is in valid range (0-1 for probability markets)
-		if price < 0 || price > 1 {
-			server.logger.Warn("token price out of valid range", "token_id", token.TokenID, "price", price)
-			continue
-		}
+			price, err := parseFloat(token.Price)
+			if err != nil || price < 0 || price > 1 {
+				continue
+			}
 
-		// Create market price using Gamma API's official average price
-		marketPrice := polymarket.MarketPrice{
-			TokenID:     token.TokenID,
-			BestBid:     price, // Gamma API gives us the official average price directly
-			BestAsk:     price, // Gamma API gives us the official average price directly
-			Spread:      0,     // Not available from Gamma API
-			MarketPrice: price, // This is Polymarket's official average price
-			PriceSource: "gamma_api", // Direct from Polymarket's Gamma API
-			LastUpdated: gammaMarket.UpdatedAt,
+			marketPrice := polymarket.MarketPrice{
+				TokenID:     token.TokenID,
+				BestBid:     price,
+				BestAsk:     price,
+				Spread:      0,
+				MarketPrice: price,
+				PriceSource: "gamma_api",
+				LastUpdated: gammaMarket.UpdatedAt,
+			}
+			prices = append(prices, marketPrice)
 		}
-		prices = append(prices, marketPrice)
 	}
 
 	if len(prices) == 0 {

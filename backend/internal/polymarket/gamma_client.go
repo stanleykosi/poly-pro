@@ -69,8 +69,12 @@ type GammaMarket struct {
 	Volume1mo        *float64  `json:"volume1mo"`        // 1-month volume
 	Image            string    `json:"image"`
 	Icon             string    `json:"icon"`
-	Tokens           []Token   `json:"tokens"`
-	ClobTokenIds     string    `json:"clobTokenIds"` // Comma-separated or JSON array string of token IDs
+	Tokens           []Token   `json:"tokens"`           // May be null - use outcomePrices instead
+	OutcomePrices    string    `json:"outcomePrices"`     // JSON string array: ["NO_price", "YES_price"]
+	BestAsk          *float64  `json:"bestAsk"`          // Best ask price
+	BestBid          *float64  `json:"bestBid"`          // Best bid price
+	LastTradePrice   *float64  `json:"lastTradePrice"`   // Last traded price
+	ClobTokenIds     string    `json:"clobTokenIds"`     // JSON array string: ["NO_token_id", "YES_token_id"]
 	CreatedAt        string    `json:"createdAt"`
 	UpdatedAt        string    `json:"updatedAt"`
 }
