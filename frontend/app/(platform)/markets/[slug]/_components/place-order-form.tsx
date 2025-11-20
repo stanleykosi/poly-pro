@@ -129,7 +129,19 @@ export default function PlaceOrderForm({
       const prices = await marketService.getOfficialMarketPrices(marketId)
       setOfficialPrices(prices)
       lastMarketIdRef.current = marketId
-      console.log('[PlaceOrderForm] Official prices loaded from Gamma API:', prices)
+      console.log('[PlaceOrderForm] Official prices loaded from Gamma API:', {
+        prices,
+        pricesCount: prices.length,
+        marketId,
+        yesTokenId,
+        noTokenId,
+        priceDetails: prices.map(p => ({
+          token_id: p.token_id,
+          market_price: p.market_price,
+          best_bid: p.best_bid,
+          best_ask: p.best_ask
+        }))
+      })
     } catch (error: any) {
       const errorMessage = error?.response?.data?.message || error?.message || 'Failed to fetch official prices'
       console.error('[PlaceOrderForm] Failed to fetch official prices:', error)
@@ -158,6 +170,17 @@ export default function PlaceOrderForm({
     fetchOfficialPrices()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketId]) // Only depend on marketId - fetchOfficialPrices is stable
+
+  // When switching to MARKET order, ensure prices are loaded
+  useEffect(() => {
+    if (orderType === 'MARKET' && officialPrices.length === 0 && !officialPricesLoading && !fetchingRef.current) {
+      console.log('[PlaceOrderForm] Switched to MARKET order but no prices available, attempting to fetch')
+      // Only fetch if we haven't already attempted for this market
+      if (lastMarketIdRef.current !== marketId) {
+        fetchOfficialPrices()
+      }
+    }
+  }, [orderType, officialPrices.length, officialPricesLoading, marketId, fetchOfficialPrices])
 
   // Get best available prices from token-specific order books for market orders
   const bestBid = useMemo(() => {
@@ -381,11 +404,55 @@ export default function PlaceOrderForm({
       targetTokenId = yesTokenId
     }
 
-    if (targetTokenId) {
-      const officialPrice = officialPrices.find(p => p.token_id === targetTokenId)
-      if (officialPrice) {
-        return officialPrice.market_price // Direct from Polymarket's Gamma API
+    if (targetTokenId && officialPrices.length > 0) {
+      // Debug: Log available prices and target token ID
+      console.log('[PlaceOrderForm] Looking for official price:', {
+        targetTokenId,
+        side,
+        availablePrices: officialPrices.map(p => ({ token_id: p.token_id, market_price: p.market_price })),
+        yesTokenId,
+        noTokenId
+      })
+
+      // Try exact match first
+      let officialPrice = officialPrices.find(p => p.token_id === targetTokenId)
+
+      // If no exact match, try case-insensitive match
+      if (!officialPrice) {
+        officialPrice = officialPrices.find(p =>
+          p.token_id.toLowerCase() === targetTokenId.toLowerCase()
+        )
       }
+
+      // If still no match and we have exactly 2 prices, use index-based matching
+      // Polymarket convention: [NO, YES] - index 0 is NO, index 1 is YES
+      if (!officialPrice && officialPrices.length === 2) {
+        if (side === 'BUY_YES' || (side === 'SELL' && yesTokenId)) {
+          officialPrice = officialPrices[1] // YES is typically second
+          console.log('[PlaceOrderForm] Using index-based matching for YES token (index 1)')
+        } else if (side === 'BUY_NO') {
+          officialPrice = officialPrices[0] // NO is typically first
+          console.log('[PlaceOrderForm] Using index-based matching for NO token (index 0)')
+        }
+      }
+
+      if (officialPrice) {
+        console.log('[PlaceOrderForm] Found official price:', officialPrice.market_price)
+        return officialPrice.market_price // Direct from Polymarket's Gamma API
+      } else {
+        console.warn('[PlaceOrderForm] No matching official price found for token:', targetTokenId, {
+          availableTokenIds: officialPrices.map(p => p.token_id),
+          targetTokenId,
+          side
+        })
+      }
+    } else if (targetTokenId && officialPrices.length === 0) {
+      console.warn('[PlaceOrderForm] No official prices available yet, targetTokenId:', targetTokenId, {
+        officialPricesLoading,
+        pricesFetchError
+      })
+    } else if (!targetTokenId) {
+      console.warn('[PlaceOrderForm] No target token ID for side:', side, { yesTokenId, noTokenId })
     }
 
     return null
